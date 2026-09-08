@@ -24,11 +24,12 @@ export interface Subunit {
   men: number;
 }
 
-const BATTALIONS: Record<UnitKind, number> = {
+const BATTALIONS: Record<string, number> = {
   mechanised: 4, armoured: 3, light: 4, airborne: 3, marine: 3, territorial: 2,
   // an air wing resolves into squadrons, a flotilla into its ships
-  airwing: 3, flotilla: 4,
+  airwing: 3, flotilla: 4, orbital: 2,
 };
+const DEFAULT_BATTALIONS = 3;
 const COMPANIES = 4;
 
 const GOLDEN = Math.PI * (3 - Math.sqrt(5));
@@ -69,7 +70,7 @@ export interface Contact {
  * of advance and set back from the line of contact by `standoff` metres.
  */
 export function battalionsInContact(d: Division, contact: Contact, standoff: number, frontage: number): Subunit[] {
-  const n = BATTALIONS[d.template];
+  const n = BATTALIONS[d.template] ?? DEFAULT_BATTALIONS;
   const tpl = TEMPLATES[d.template];
   const [dxLon, dxLat] = mToDeg(1, contact.lat);
   // perpendicular to the axis, in metres
@@ -103,7 +104,7 @@ export function battalionsInContact(d: Division, contact: Contact, standoff: num
  * `spreadM` is the formation's frontage in metres.
  */
 export function battalionsOf(d: Division, lon: number, lat: number, spreadM: number): Subunit[] {
-  const n = BATTALIONS[d.template];
+  const n = BATTALIONS[d.template] ?? DEFAULT_BATTALIONS;
   const tpl = TEMPLATES[d.template];
   const out: Subunit[] = [];
   for (let i = 0; i < n; i++) {

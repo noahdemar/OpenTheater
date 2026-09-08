@@ -14,7 +14,7 @@ export const START_DATE = Date.UTC(2026, 0, 1);
  * hundred metres, a tank across three kilometres, and the brigade's guns reach
  * tens of kilometres beyond that.
  */
-export const TEMPLATES: Record<UnitKind, Template> = {
+export const TEMPLATES: Record<string, Template> = {
   mechanised:  { kind: 'mechanised',  name: 'Mechanised Bde', manpower: 4500, softAttack: 30, hardAttack: 18, defence: 44, breakthrough: 28, armour: 12, speed: 15, organisation: 60, supplyUse: 1.8, range: 2200, artillery: 18000 },
   armoured:    { kind: 'armoured',    name: 'Armoured Bde',   manpower: 4000, softAttack: 44, hardAttack: 46, defence: 32, breakthrough: 64, armour: 34, speed: 13, organisation: 48, supplyUse: 2.6, range: 3000, artillery: 20000 },
   light:       { kind: 'light',       name: 'Motor Rifle Bde',manpower: 3800, softAttack: 24, hardAttack: 8,  defence: 38, breakthrough: 16, armour: 3,  speed: 20, organisation: 58, supplyUse: 1.2, range: 800,  artillery: 12000 },
@@ -25,6 +25,8 @@ export const TEMPLATES: Record<UnitKind, Template> = {
   airwing:     { kind: 'airwing',     name: 'Air Wing',       manpower: 1200, softAttack: 34, hardAttack: 26, defence: 14, breakthrough: 20, armour: 0,  speed: 720, organisation: 70, supplyUse: 3.0, range: 400,  artillery: 260000 },
   // sails from ports only
   flotilla:    { kind: 'flotilla',    name: 'Flotilla',       manpower: 2200, softAttack: 26, hardAttack: 30, defence: 30, breakthrough: 10, armour: 18, speed: 38,  organisation: 60, supplyUse: 2.2, range: 18000, artillery: 90000 },
+  // on station above the theatre: no base, no front, global reach
+  orbital:     { kind: 'orbital',     name: 'Orbital Group',  manpower: 300,  softAttack: 18, hardAttack: 22, defence: 8,  breakthrough: 12, armour: 0,  speed: 27000, organisation: 80, supplyUse: 4.0, range: 1200, artillery: 2000000 },
 };
 
 /** The six playable powers, keyed by their name in the map data. */

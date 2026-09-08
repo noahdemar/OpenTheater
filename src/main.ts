@@ -9,7 +9,10 @@ import { registerMapImages } from './map/images';
 import { UnitOverlay } from './map/units';
 import { World } from './game/world';
 import { RoadNetwork } from './game/roads';
-import { applyOrderOfBattle, atWar, buildScenario, considerPeace, garrisonBases } from './game/scenario';
+import {
+  applyOrderOfBattle, atWar, buildScenario, considerPeace, garrisonBases, type OobUnit,
+} from './game/scenario';
+import { clearWorld, resetWorld } from './editor/world';
 import { Installations } from './game/installations';
 import { AirOperations } from './game/air';
 import { ArmyStore } from './game/armies';
@@ -25,6 +28,8 @@ import { Demo } from './game/demo';
 import { LayersPanel } from './ui/layers';
 import { NationPanel } from './ui/nation';
 import { hasSave, loadGame, saveGame, savedAt } from './game/save';
+import { EditorModel } from './editor/model';
+import { EditorPanel } from './editor/panel';
 import { EventLog } from './ui/events';
 import { TopBar } from './ui/topbar';
 import { UnitCard } from './ui/unitcard';
@@ -81,12 +86,15 @@ async function boot() {
   console.log(`[bases] ${JSON.stringify(installations.counts)} -> ${based.wings} air wings, ${based.flotillas} flotillas`);
   const air = new AirOperations(installations);
 
-  // real names and garrisons, where Wikidata knows them
+  // real names and garrisons, where Wikidata knows them. Kept around so the
+  // world can be rebuilt from scratch without reloading the page.
+  let oobUnits: OobUnit[] = [];
   try {
     const base = import.meta.env.BASE_URL || '/';
     const oob = await fetch(`${base}data/oob.json`, { cache: 'no-store' }).then((r) => r.json());
-    const applied = applyOrderOfBattle(scn, oob.units);
-    console.log(`[oob] ${applied} formations given real identities from ${oob.units.length} records`);
+    oobUnits = oob.units as OobUnit[];
+    const applied = applyOrderOfBattle(scn, oobUnits);
+    console.log(`[oob] ${applied} formations given real identities from ${oobUnits.length} records`);
   } catch (err) {
     console.warn('[oob] unavailable, formations stay procedural', err);
   }
@@ -181,7 +189,7 @@ async function boot() {
     tech.render();
     bar.update();
   }, () => { demo.running ? demo.stop() : demo.start(); }, () => industry.toggle(),
-     () => doSave(), () => doLoad(), () => hasSave());
+     () => doSave(), () => doLoad(), () => hasSave(), () => editor.toggle());
 
   /**
    * Globe or flat map. The counters live on a canvas above the map, so the
@@ -362,6 +370,16 @@ async function boot() {
   });
 
   map.on('click', (e) => {
+    // the editor owns the map while it is painting or placing
+    if (editor.open && (paintNation || placingNode)) {
+      const province = provinceAt(e.point.x, e.point.y);
+      if (province != null && editor.placeAt(province)) {
+        political.refreshAll();
+        overlay.draw();
+        return;
+      }
+    }
+
     // drawing a plan swallows clicks until the line is finished
     if (plans.draft) {
       plans.addPoint(e.lngLat.lng, e.lngLat.lat);
@@ -516,6 +534,7 @@ async function boot() {
     if (e.key === 'p' || e.key === 'P') { layers.toggle('political'); return; }
     if (e.key === 'n' || e.key === 'N') { layers.toggle('nato'); return; }
     if (e.key === 'g' || e.key === 'G') { layers.toggle('globe'); return; }
+    if (e.key === 'e' || e.key === 'E') { editor.toggle(); return; }
     if ((e.key === 's' || e.key === 'S') && !e.metaKey && !e.ctrlKey) { doSave(); return; }
     if ((e.key === 'l' || e.key === 'L') && !e.metaKey && !e.ctrlKey) { doLoad(); return; }
     if (e.key === 'c' || e.key === 'C') {
@@ -546,6 +565,80 @@ async function boot() {
       setFollowing(false);
     }
   });
+
+  // --- scenario editor ------------------------------------------------------
+  const editorModel = new EditorModel();
+  let paintNation: string | null = null;
+  let placingNode: string | null = null;
+
+  /** Everything that has to be rebuilt when the world is replaced wholesale. */
+  const afterWorldChange = () => {
+    overlay.selected.clear();
+    overlay.selectedUnits.clear();
+    political.setSelected([]);
+    political.refreshAll();
+    political.rebuildFrontline();
+    overlay.rebuildHierarchy();
+    overlay.rebuild();
+    overlay.draw();
+    card.clear();
+    nationPanel.clear();
+    events.clear();
+    armyBar.render();
+    industry.render();
+    bar.refreshNations();
+    bar.update();
+  };
+
+  const editor = new EditorPanel(editorModel, {
+    provinceName: (id) => world.province(id)?.n ?? '—',
+    onPaintNation: (tag) => { paintNation = tag; },
+    onPlaceNode: (id) => { placingNode = id; },
+    status: (text) => hud.setStatus(text),
+    worldSummary: () => ({
+      nations: scn.nations.size,
+      divisions: scn.divisions.length,
+      owned: scn.controller.reduce((n, c) => n + (c >= 0 ? 1 : 0), 0),
+    }),
+    onClearWorld: () => {
+      clearWorld({ scn, sim, armies, plans, production });
+      playerId = -1;
+      overlay.playerId = -1;
+      sim.playerNation = -1;
+      afterWorldChange();
+      hud.setStatus('world cleared — build nations, paint their ground, then apply');
+    },
+    onResetWorld: () => {
+      const r = resetWorld(
+        { scn, sim, armies, plans, production },
+        world.data, installations, oobUnits,
+        (p) => [world.province(p).lon, world.province(p).lat],
+      );
+      const first = [...scn.nations.values()].find((n) => n.tag === 'GER')
+        ?? [...scn.nations.values()][0];
+      playerId = first?.id ?? -1;
+      overlay.playerId = playerId;
+      sim.playerNation = playerId;
+      for (const d of scn.divisions) if (d.template === 'airwing') air.station(d);
+      afterWorldChange();
+      hud.setStatus(`scenario reset · ${r.nations} nations · ${r.divisions} formations`);
+    },
+    onCommit: () => {
+      let nextId = Math.max(0, ...scn.divisions.map((d) => d.id)) + 1;
+      const r = editorModel.commit(scn, () => nextId++, (p) =>
+        [world.province(p).lon, world.province(p).lat]);
+      // a freshly built world needs someone to play
+      if (playerId < 0) {
+        const mine = [...scn.nations.values()].find((n) => editorModel.nations.some((c) => c.tag === n.tag));
+        if (mine) { playerId = mine.id; overlay.playerId = mine.id; sim.playerNation = mine.id; }
+      }
+      for (const [id] of scn.nations) production.addNation(id);
+      afterWorldChange();
+      hud.setStatus(
+        `scenario applied · ${r.nations} nations · ${r.provinces} provinces · ${r.units} formations`);
+    },
+  });
+  document.getElementById('hud')!.append(editor.el);
 
   // --- saving ---------------------------------------------------------------
   const applyLoadedState = () => {
@@ -697,7 +790,7 @@ async function boot() {
 
   Object.assign(window as unknown as Record<string, unknown>,
     { map, world, scn, sim, overlay, plans, overlays, layers, demo, political,
-      installations, production, armies, air });
+      installations, production, armies, air, editor, editorModel });
   document.body.dataset.ready = '1';
 }
 
