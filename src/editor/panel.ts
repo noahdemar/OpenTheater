@@ -19,6 +19,8 @@ export interface EditorHooks {
   provinceName: (id: number) => string;
   /** paint mode: which nation the next map click assigns ground to */
   onPaintNation: (tag: string | null) => void;
+  /** a province just painted, so the map can show it at once */
+  onPaintedProvince: (province: number, color: string | null) => void;
   /** the node awaiting a location, set by clicking the map */
   onPlaceNode: (id: string | null) => void;
   onCommit: () => void;
@@ -75,7 +77,16 @@ export class EditorPanel {
       return true;
     }
     if (this.paintTag) {
-      this.model.assignProvince(this.paintTag, province);
+      const nation = this.model.nations.find((n) => n.tag === this.paintTag);
+      // clicking ground a nation already holds hands it back, so the same
+      // brush both paints and erases
+      const held = nation?.provinces.includes(province) ?? false;
+      if (held) this.model.unassignProvince(province);
+      else this.model.assignProvince(this.paintTag, province);
+      this.hooks.onPaintedProvince(province, held ? null : nation?.color ?? null);
+      this.hooks.status(held
+        ? `${this.hooks.provinceName(province)} released`
+        : `${this.hooks.provinceName(province)} → ${nation?.name ?? this.paintTag}`);
       this.render();
       return true;
     }

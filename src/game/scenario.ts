@@ -1,4 +1,5 @@
 import type { Division, Faction, Nation, Template, UnitKind, WorldData } from './types';
+import { rng } from './rng';
 
 /**
  * A present-day scenario. The map is OpenStreetMap as of 2026, so the political
@@ -95,15 +96,6 @@ export const warKey = (a: number, b: number) => (a < b ? `${a}:${b}` : `${b}:${a
 const ORDINAL = ['1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th', '10th', '11th',
   '12th', '14th', '16th', '18th', '20th', '21st', '24th', '25th', '27th', '30th', '33rd',
   '36th', '40th', '42nd', '45th', '48th', '52nd'];
-
-function rng(seed: number) {
-  return () => {
-    seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 /** A real installation, as far as unit placement cares about one. */
 export interface BaseSite { p: number; lon: number; lat: number }
@@ -247,7 +239,6 @@ export function garrisonBases(
   scn: Scenario,
   airfields: BaseSite[],
   ports: BaseSite[],
-  _at: (province: number) => [number, number],
 ): { wings: number; flotillas: number } {
   let nextId = Math.max(0, ...scn.divisions.map((d) => d.id)) + 1;
   const rand = rng(77);

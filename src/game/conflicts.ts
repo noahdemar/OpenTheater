@@ -21,6 +21,7 @@ import type { Scenario } from './scenario';
 import { warKey } from './scenario';
 import type { World } from './world';
 import type { Division, Nation, UnitKind } from './types';
+import { rng } from './rng';
 
 export type Tier = 'major' | 'minor' | 'conflict' | 'skirmish';
 
@@ -159,16 +160,6 @@ export class Conflicts {
   }
 }
 
-/** Deterministic noise, so a given world always comes out the same way. */
-function rng(seed: number) {
-  return () => {
-    seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 export interface Belligerent {
   /** nation id: an existing state, or a non-state actor created here */
   id: number;
@@ -259,7 +250,6 @@ export function applyConflicts(scn: Scenario, world: World, conflicts: Conflicts
         sides[0].push({ id: p.id, name: scn.nations.get(p.id)?.name ?? p.wiki, state: true });
       }
       const host = parties[0].id;
-      const hostName = scn.nations.get(host)?.name ?? parties[0].wiki;
       const movement: Nation = {
         id: nextNationId++,
         name: record.name,
@@ -290,7 +280,6 @@ export function applyConflicts(scn: Scenario, world: World, conflicts: Conflicts
       // the fighting is still over the host's ground even where no territory
       // has changed hands
       if (!provinces.length) provinces.push(...(provincesOf.get(host) ?? []));
-      void hostName;
     }
 
     states.push({ record, sides, provinces, intensity: intensity(record) });

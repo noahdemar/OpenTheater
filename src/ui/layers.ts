@@ -18,6 +18,9 @@ export class LayersPanel {
     { id: 'bases', label: 'Military bases', on: true },
     { id: 'airfields', label: 'Airfields', on: true },
     { id: 'ports', label: 'Ports', on: true },
+    { id: 'satellites', label: 'Satellites', on: false, hint: 'K' },
+    { id: 'satfootprints', label: 'Satellite footprints', on: true },
+    { id: 'conflictzones', label: 'Conflict zones', on: true },
     { id: 'nato', label: 'NATO symbols', on: false, hint: 'N' },
     { id: 'globe', label: 'Globe view', on: false, hint: 'G' },
   ];

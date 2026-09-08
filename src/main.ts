@@ -31,6 +31,9 @@ import { hasSave, loadGame, saveGame, savedAt } from './game/save';
 import { Conflicts, annualDeaths, applyConflicts, type ConflictModel, type ConflictRecord } from './game/conflicts';
 import { ConflictLayer } from './map/conflicts';
 import { ConflictPanel } from './ui/conflicts';
+import { MISSIONS, Satellites, footprintKm } from './game/satellites';
+import { SatelliteLayer } from './map/satellites';
+import { closeable } from './ui/close';
 import { EditorModel } from './editor/model';
 import { EditorPanel } from './editor/panel';
 import { EventLog } from './ui/events';
@@ -85,7 +88,6 @@ async function boot() {
     scn,
     installations.all.filter((i) => i.t === 'air'),
     installations.all.filter((i) => i.t === 'port'),
-    (province) => [world.province(province).lon, world.province(province).lat],
   );
   console.log(`[bases] ${JSON.stringify(installations.counts)} -> ${based.wings} air wings, ${based.flotillas} flotillas`);
   const air = new AirOperations(installations);
@@ -110,6 +112,19 @@ async function boot() {
 
   const overlays = new Overlays(map);
   overlays.add();
+
+  // --- space ---------------------------------------------------------------
+  // Satellites are not units on the ground: they are on orbits, and what they
+  // give a commander is coverage. Each one carries the patch of earth it can
+  // currently see.
+  const satellites = new Satellites();
+  for (const n of scn.nations.values()) {
+    if (n.playable) satellites.launch(n.id, n.tag, 'major');
+  }
+  const satLayer = new SatelliteLayer(map, satellites,
+    (owner) => scn.nations.get(owner)?.color ?? '#9fb2c4');
+  satLayer.add();
+  satLayer.trackOwner = playerId;
 
   // --- the real world -------------------------------------------------------
   // The shipped scenario is an invention. This is the alternative: the wars
@@ -253,6 +268,7 @@ async function boot() {
   const bar = new TopBar(sim, scn, () => playerId, (id) => {
     playerId = id;
     overlay.playerId = id;
+    satLayer.trackOwner = id;
     sim.playerNation = id;
     tech.render();
     bar.update();
@@ -272,6 +288,14 @@ async function boot() {
     overlay.draw();
   };
 
+  /** Footprints are a sub-layer of the satellites: both switches must agree. */
+  const applyFootprintToggle = () => {
+    const on = layers.get('satellites') && layers.get('satfootprints');
+    for (const l of ['satellites/footprint', 'satellites/footprint-edge']) {
+      if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none');
+    }
+  };
+
   const layers = new LayersPanel((id, on) => {
     if (layers.isOverlay(id)) { overlays.toggle(id, on); return; }
     switch (id) {
@@ -289,6 +313,12 @@ async function boot() {
       case 'nato': overlay.iconStyle = on ? 'nato' : 'pictorial'; break;
       case 'globe': setGlobe(on); break;
       case 'plans': overlay.showPlans = on; break;
+      case 'satellites':
+        satLayer.setVisible(on);
+        applyFootprintToggle();
+        break;
+      case 'satfootprints': applyFootprintToggle(); break;
+      case 'conflictzones': conflictLayer.visible = on; break;
     }
     overlay.draw();
   });
@@ -322,6 +352,7 @@ async function boot() {
   document.getElementById('hud')!.append(
     bar.el, card.el, tech.el, layers.el, nationPanel.el, industry.el, armyBar.el, events.el,
     conflictPanel.el);
+
 
   // --- the set piece --------------------------------------------------------
   const demo = new Demo(map, world, scn, sim, plans, {
@@ -443,11 +474,9 @@ async function boot() {
     // the editor owns the map while it is painting or placing
     if (editor.open && (paintNation || placingNode)) {
       const province = provinceAt(e.point.x, e.point.y);
-      if (province != null && editor.placeAt(province)) {
-        political.refreshAll();
-        overlay.draw();
-        return;
-      }
+      // the province itself is repainted by the paint hook; a full refresh of
+      // every province on every brush stroke is wasted work
+      if (province != null && editor.placeAt(province)) { overlay.draw(); return; }
     }
 
     // drawing a plan swallows clicks until the line is finished
@@ -455,6 +484,19 @@ async function boot() {
       plans.addPoint(e.lngLat.lng, e.lngLat.lat);
       overlay.draw();
       return;
+    }
+
+    // a satellite sits above everything else on the map, so it is asked first
+    if (satLayer.visible) {
+      const sat = satLayer.hitTest(e.point.x, e.point.y);
+      if (sat) {
+        const spec = MISSIONS[sat.mission];
+        const owner = scn.nations.get(sat.owner)?.name ?? 'unknown';
+        hud.setStatus(`${sat.name} · ${owner} · ${spec.role} · ${sat.altitudeKm.toLocaleString()} km, `
+          + `${sat.inclinationDeg.toFixed(1)}° inclination · ${Math.round(sat.periodMin)} min period · `
+          + `${Math.round(footprintKm(sat.altitudeKm)).toLocaleString()} km footprint radius`);
+        return;
+      }
     }
 
     // left click selects, and nothing else
@@ -604,7 +646,7 @@ async function boot() {
     if (e.key === 'p' || e.key === 'P') { layers.toggle('political'); return; }
     if (e.key === 'n' || e.key === 'N') { layers.toggle('nato'); return; }
     if (e.key === 'g' || e.key === 'G') { layers.toggle('globe'); return; }
-    if (e.key === 'e' || e.key === 'E') { editor.toggle(); return; }
+    if (e.key === 'e' || (e.key === 'E' && !e.shiftKey)) { editor.toggle(); return; }
     if (e.key === 'w' || e.key === 'W') { void toggleConflictModel(); return; }
     if ((e.key === 's' || e.key === 'S') && !e.metaKey && !e.ctrlKey) { doSave(); return; }
     if ((e.key === 'l' || e.key === 'L') && !e.metaKey && !e.ctrlKey) { doLoad(); return; }
@@ -618,8 +660,12 @@ async function boot() {
       return;
     }
     if (e.key === 'u' || e.key === 'U') { layers.toggle('units'); return; }
+    if (e.key === 'k' || e.key === 'K') { layers.toggle('satellites'); return; }
     if (e.code === 'Space') { e.preventDefault(); sim.speed = sim.speed ? 0 : 2; bar.update(); }
     if (e.key >= '1' && e.key <= '5') { sim.speed = Number(e.key); bar.update(); }
+    if (e.key === 'Y' && e.shiftKey) { layers.el.hidden = !layers.el.hidden; return; }
+    if (e.key === 'A' && e.shiftKey) { armyBar.el.hidden = !armyBar.el.hidden; return; }
+    if (e.key === 'E' && e.shiftKey) { events.el.hidden = !events.el.hidden; return; }
     if (e.key === 't' || e.key === 'T') tech.toggle();
     if (e.key === 'b' && e.shiftKey) { industry.toggle(); return; }
     if (e.key === 'Escape') {
@@ -631,8 +677,10 @@ async function boot() {
         overlay.draw();
         return;
       }
+      // Escape peels one layer at a time: first the top panel, then selection
+      if (closeTopPanel()) return;
       overlay.selected.clear(); overlay.selectedUnits.clear();
-      political.setSelected([]); card.clear(); tech.toggle(false); industry.toggle(false);
+      political.setSelected([]);
       setFollowing(false);
     }
   });
@@ -663,7 +711,16 @@ async function boot() {
 
   const editor = new EditorPanel(editorModel, {
     provinceName: (id) => world.province(id)?.n ?? '—',
-    onPaintNation: (tag) => { paintNation = tag; },
+    onPaintNation: (tag) => {
+      paintNation = tag;
+      map.getCanvas().style.cursor = tag ? 'crosshair' : '';
+    },
+    // paint shows up under the brush, not when the scenario is applied later
+    onPaintedProvince: (province, color) => {
+      if (color) political.overrides.set(province, color);
+      else political.overrides.delete(province);
+      political.setProvinceOwner(province);
+    },
     onPlaceNode: (id) => { placingNode = id; },
     status: (text) => hud.setStatus(text),
     worldSummary: () => ({
@@ -673,6 +730,7 @@ async function boot() {
     }),
     onClearWorld: () => {
       clearWorld({ scn, sim, armies, plans, production });
+      political.overrides.clear();
       playerId = -1;
       overlay.playerId = -1;
       sim.playerNation = -1;
@@ -680,10 +738,10 @@ async function boot() {
       hud.setStatus('world cleared — build nations, paint their ground, then apply');
     },
     onResetWorld: () => {
+      political.overrides.clear();
       const r = resetWorld(
         { scn, sim, armies, plans, production },
         world.data, installations, oobUnits,
-        (p) => [world.province(p).lon, world.province(p).lat],
       );
       const first = [...scn.nations.values()].find((n) => n.tag === 'GER')
         ?? [...scn.nations.values()][0];
@@ -704,12 +762,47 @@ async function boot() {
         if (mine) { playerId = mine.id; overlay.playerId = mine.id; sim.playerNation = mine.id; }
       }
       for (const [id] of scn.nations) production.addNation(id);
+      // the paint preview has become the real thing; drop the overrides so the
+      // map goes back to reading the scenario
+      political.overrides.clear();
       afterWorldChange();
       hud.setStatus(
         `scenario applied · ${r.nations} nations · ${r.provinces} provinces · ${r.units} formations`);
     },
   });
   document.getElementById('hud')!.append(editor.el);
+
+  /**
+   * Every panel closes, and every panel can be brought back. Escape closes the
+   * top one; the shortcut in each entry reopens it.
+   */
+  // Ordered by how readily Escape should close them: the standing chrome
+  // first, the dialogs the player just opened last.
+  const panels: { name: string; el: HTMLElement; set: (on: boolean) => void; key: string }[] = [
+    { name: 'Layers', el: layers.el, set: (on) => { layers.el.hidden = !on; }, key: 'Shift+Y' },
+    { name: 'Armies', el: armyBar.el, set: (on) => { armyBar.el.hidden = !on; }, key: 'Shift+A' },
+    { name: 'Events', el: events.el, set: (on) => { events.el.hidden = !on; }, key: 'Shift+E' },
+    { name: 'Unit', el: card.el, set: (on) => { if (!on) card.clear(); }, key: 'click a formation' },
+    { name: 'Nation', el: nationPanel.el, set: (on) => { if (!on) nationPanel.clear(); }, key: 'click a nation' },
+    { name: 'Research', el: tech.el, set: (on) => tech.toggle(on), key: 'T' },
+    { name: 'Industry', el: industry.el, set: (on) => industry.toggle(on), key: 'Shift+B' },
+    { name: 'World Conflicts', el: conflictPanel.el, set: (on) => conflictPanel.toggle(on), key: 'W' },
+    { name: 'Scenario Editor', el: editor.el, set: (on) => editor.toggle(on), key: 'E' },
+  ];
+  for (const p of panels) {
+    closeable(p.el, () => {
+      p.set(false);
+      hud.setStatus(`${p.name} closed — ${p.key.length > 3 ? p.key : `press ${p.key}`} to bring it back`);
+    });
+  }
+  /** Close the panel the eye would call the top one: the last one opened. */
+  const closeTopPanel = (): boolean => {
+    const open = panels.filter((p) => !p.el.hidden);
+    const top = open[open.length - 1];
+    if (!top) return false;
+    top.set(false);
+    return true;
+  };
 
   // --- saving ---------------------------------------------------------------
   const applyLoadedState = () => {
@@ -782,6 +875,7 @@ async function boot() {
   let sinceRebuild = 0;
   let sinceUi = 0;
   let sinceFront = 0;
+  let sinceSats = 0;
   const frame = (now: number) => {
     const dt = Math.min(0.25, (now - last) / 1000);
     last = now;
@@ -798,6 +892,11 @@ async function boot() {
         overlay.rebuildHierarchy();
       });
     }
+    if (elapsedDays > 0) satellites.step(elapsedDays * 24);
+    // a footprint is thousands of kilometres across; redrawing it sixty times
+    // a second buys nothing, so the orbits are painted a few times a second
+    sinceSats += dt;
+    if (sinceSats > 0.2) { satLayer.update(); sinceSats = 0; }
     overlay.tick(dt);
     followStep();
     sinceRebuild += dt;
@@ -861,7 +960,8 @@ async function boot() {
 
   Object.assign(window as unknown as Record<string, unknown>,
     { map, world, scn, sim, overlay, plans, overlays, layers, demo, political,
-      installations, production, armies, air, editor, editorModel });
+      installations, production, armies, air, editor, editorModel,
+      satellites, satLayer, conflictLayer });
   document.body.dataset.ready = '1';
 }
 

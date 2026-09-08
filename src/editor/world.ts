@@ -57,7 +57,6 @@ export function resetWorld(
   data: WorldData,
   installations: Installations,
   oob: OobUnit[],
-  at: (province: number) => [number, number],
 ): { nations: number; divisions: number } {
   const { scn, sim, production } = parts;
   const fresh = buildScenario(data, installations.all.filter((i) => i.t === 'base'));
@@ -79,7 +78,6 @@ export function resetWorld(
     scn,
     installations.all.filter((i) => i.t === 'air'),
     installations.all.filter((i) => i.t === 'port'),
-    at,
   );
   if (oob.length) applyOrderOfBattle(scn, oob);
 
