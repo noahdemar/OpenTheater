@@ -60,7 +60,7 @@ export function resetWorld(
   at: (province: number) => [number, number],
 ): { nations: number; divisions: number } {
   const { scn, sim, production } = parts;
-  const fresh = buildScenario(data);
+  const fresh = buildScenario(data, installations.all.filter((i) => i.t === 'base'));
 
   clearWorld(parts);
 

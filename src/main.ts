@@ -28,6 +28,9 @@ import { Demo } from './game/demo';
 import { LayersPanel } from './ui/layers';
 import { NationPanel } from './ui/nation';
 import { hasSave, loadGame, saveGame, savedAt } from './game/save';
+import { Conflicts, annualDeaths, applyConflicts, type ConflictModel, type ConflictRecord } from './game/conflicts';
+import { ConflictLayer } from './map/conflicts';
+import { ConflictPanel } from './ui/conflicts';
 import { EditorModel } from './editor/model';
 import { EditorPanel } from './editor/panel';
 import { EventLog } from './ui/events';
@@ -73,10 +76,11 @@ new ResizeObserver(() => map.resize()).observe(container);
 
 async function boot() {
   const world = await World.load();
-  const scn = buildScenario(world.data);
 
-  // air and naval forces exist only where there is somewhere to base them
+  // air and naval forces exist only where there is somewhere to base them, and
+  // the army starts in its barracks
   const installations = await Installations.load();
+  const scn = buildScenario(world.data, installations.all.filter((i) => i.t === 'base'));
   const based = garrisonBases(
     scn,
     installations.all.filter((i) => i.t === 'air'),
@@ -106,6 +110,70 @@ async function boot() {
 
   const overlays = new Overlays(map);
   overlays.add();
+
+  // --- the real world -------------------------------------------------------
+  // The shipped scenario is an invention. This is the alternative: the wars
+  // that are actually being fought, with their real participants and their
+  // real death tolls, loaded from Wikipedia's list of ongoing armed conflicts.
+  const conflictLayer = new ConflictLayer(map);
+  conflictLayer.add();
+  let conflicts: Conflicts | null = null;
+  let conflictModel: ConflictModel | null = null;
+
+  const focusConflict = (c: ConflictRecord) => {
+    const st = conflictModel?.states.find((x) => x.record.id === c.id);
+    const provs = st?.provinces ?? [];
+    if (!provs.length) return;
+    let west = 180, east = -180, south = 90, north = -90;
+    for (const id of provs) {
+      const p = world.province(id);
+      west = Math.min(west, p.lon); east = Math.max(east, p.lon);
+      south = Math.min(south, p.lat); north = Math.max(north, p.lat);
+    }
+    map.fitBounds([[west, south], [east, north]], { padding: 120, maxZoom: 7, duration: 1200 });
+    const dead = annualDeaths(c);
+    hud.setStatus(`${c.name} — ${c.countries.join(', ')}${dead ? ` · ${dead.toLocaleString()} killed in the latest year on record` : ''}`);
+  };
+
+  const conflictPanel = new ConflictPanel(
+    // the panel is built lazily, once the data is in; this proxy stands in
+    // until then so the HUD can be assembled in one place
+    new Proxy({} as Conflicts, { get: (_t, k) => (conflicts as never)?.[k as never] }),
+    focusConflict);
+
+  /**
+   * Switch the world over to the real geopolitical picture. The invented blocs
+   * and their world war are dropped, real wars are declared between the real
+   * belligerents, and armed movements are raised on the ground they hold.
+   */
+  const toggleConflictModel = async () => {
+    if (!conflicts) {
+      try {
+        conflicts = await Conflicts.load();
+      } catch (err) {
+        hud.setStatus('conflict data unavailable — run `node tools/conflicts.mjs`');
+        console.warn('[conflicts]', err);
+        return;
+      }
+    }
+    if (conflictModel) {                       // already applied: just show/hide
+      conflictPanel.toggle();
+      return;
+    }
+    conflictModel = applyConflicts(scn, world, conflicts);
+    conflictLayer.apply(conflictModel, (tier) => conflicts!.tier(tier as never).color);
+    for (const d of scn.divisions) sim.byId.set(d.id, d);
+    political.refreshAll();
+    political.rebuildFrontline();
+    overlay.rebuildHierarchy();
+    overlay.rebuild();
+    overlay.draw();
+    bar.refreshNations();
+    conflictPanel.toggle(true);
+    const armed = conflictModel.states.length;
+    hud.setStatus(`Conflict model: ${armed} ongoing conflicts, ${conflictModel.nonStateNations.length} armed movements, ${scn.wars.size} wars`);
+    console.log(`[conflicts] ${armed} conflicts, ${scn.wars.size} wars, ${scn.divisions.length} formations`);
+  };
 
   const plans = new PlanStore();
 
@@ -189,7 +257,8 @@ async function boot() {
     tech.render();
     bar.update();
   }, () => { demo.running ? demo.stop() : demo.start(); }, () => industry.toggle(),
-     () => doSave(), () => doLoad(), () => hasSave(), () => editor.toggle());
+     () => doSave(), () => doLoad(), () => hasSave(), () => editor.toggle(),
+     () => toggleConflictModel());
 
   /**
    * Globe or flat map. The counters live on a canvas above the map, so the
@@ -251,7 +320,8 @@ async function boot() {
   });
 
   document.getElementById('hud')!.append(
-    bar.el, card.el, tech.el, layers.el, nationPanel.el, industry.el, armyBar.el, events.el);
+    bar.el, card.el, tech.el, layers.el, nationPanel.el, industry.el, armyBar.el, events.el,
+    conflictPanel.el);
 
   // --- the set piece --------------------------------------------------------
   const demo = new Demo(map, world, scn, sim, plans, {
@@ -535,6 +605,7 @@ async function boot() {
     if (e.key === 'n' || e.key === 'N') { layers.toggle('nato'); return; }
     if (e.key === 'g' || e.key === 'G') { layers.toggle('globe'); return; }
     if (e.key === 'e' || e.key === 'E') { editor.toggle(); return; }
+    if (e.key === 'w' || e.key === 'W') { void toggleConflictModel(); return; }
     if ((e.key === 's' || e.key === 'S') && !e.metaKey && !e.ctrlKey) { doSave(); return; }
     if ((e.key === 'l' || e.key === 'L') && !e.metaKey && !e.ctrlKey) { doLoad(); return; }
     if (e.key === 'c' || e.key === 'C') {

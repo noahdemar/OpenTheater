@@ -105,7 +105,10 @@ function rng(seed: number) {
   };
 }
 
-export function buildScenario(data: WorldData): Scenario {
+/** A real installation, as far as unit placement cares about one. */
+export interface BaseSite { p: number; lon: number; lat: number }
+
+export function buildScenario(data: WorldData, bases: BaseSite[] = []): Scenario {
   const rand = rng(2026);
   const nations = new Map<number, Nation>();
   const byName = new Map(data.countries.map((c) => [c.name, c]));
@@ -159,6 +162,16 @@ export function buildScenario(data: WorldData): Scenario {
     byCountry.set(p.c, list);
   }
 
+  // army bases, indexed by the nation that owns the ground they stand on
+  const basesOf = new Map<number, BaseSite[]>();
+  for (const b of bases) {
+    if (b.p < 0 || b.p >= data.provinces.length) continue;
+    const cid = data.provinces[b.p].c;
+    const list = basesOf.get(cid) ?? [];
+    list.push(b);
+    basesOf.set(cid, list);
+  }
+
   for (const [cid, provs] of byCountry) {
     const nation = nations.get(cid)!;
     const isMajor = nation.playable;
@@ -169,8 +182,14 @@ export function buildScenario(data: WorldData): Scenario {
     const border = provs.filter((id) =>
       data.provinces[id].nb.some((nb) => data.provinces[nb].c !== cid));
     const pool = border.length ? border : provs;
+    // Peacetime dispositions: most of the army sits in its barracks, and the
+    // rest covers the frontier. Where the archive knows no bases at all, the
+    // whole force falls back to the border.
+    const garrisons = basesOf.get(cid) ?? [];
+    const inBarracks = Math.min(garrisons.length, Math.round(count * 0.6));
     for (let i = 0; i < count; i++) {
-      const province = pool[Math.floor(rand() * pool.length)];
+      const barracks = i < inBarracks ? garrisons[Math.floor(rand() * garrisons.length)] : null;
+      const province = barracks ? barracks.p : pool[Math.floor(rand() * pool.length)];
       const roll = rand();
       const template: UnitKind = !isMajor
         ? (roll < 0.55 ? 'light' : roll < 0.85 ? 'territorial' : 'mechanised')
@@ -185,7 +204,8 @@ export function buildScenario(data: WorldData): Scenario {
         template,
         name: `${ORDINAL[i % ORDINAL.length]} ${TEMPLATES[template].name}`,
         province,
-        pos: [data.provinces[province].lon, data.provinces[province].lat],
+        pos: barracks ? [barracks.lon, barracks.lat]
+          : [data.provinces[province].lon, data.provinces[province].lat],
         strength: 0.85 + rand() * 0.15,
         org: 0.9 + rand() * 0.1,
         experience: isMajor ? rand() * 0.25 : rand() * 0.08,
@@ -225,22 +245,22 @@ export function buildScenario(data: WorldData): Scenario {
  */
 export function garrisonBases(
   scn: Scenario,
-  airfields: { p: number }[],
-  ports: { p: number }[],
-  at: (province: number) => [number, number],
+  airfields: BaseSite[],
+  ports: BaseSite[],
+  _at: (province: number) => [number, number],
 ): { wings: number; flotillas: number } {
   let nextId = Math.max(0, ...scn.divisions.map((d) => d.id)) + 1;
   const rand = rng(77);
   let wings = 0, flotillas = 0;
 
-  const byNation = (list: { p: number }[]) => {
-    const out = new Map<number, number[]>();
+  const byNation = (list: BaseSite[]) => {
+    const out = new Map<number, BaseSite[]>();
     for (const i of list) {
       if (i.p < 0) continue;
       const owner = scn.controller[i.p];
-      const provs = out.get(owner) ?? [];
-      if (!provs.includes(i.p)) provs.push(i.p);
-      out.set(owner, provs);
+      const sites = out.get(owner) ?? [];
+      sites.push(i);
+      out.set(owner, sites);
     }
     return out;
   };
@@ -250,28 +270,39 @@ export function garrisonBases(
 
   for (const [owner, nation] of scn.nations) {
     const major = nation.playable;
-    const airProvs = air.get(owner) ?? [];
-    const seaProvs = sea.get(owner) ?? [];
-    const nWings = Math.min(airProvs.length, major ? 6 : airProvs.length > 3 ? 2 : 1);
-    const nFlot = Math.min(seaProvs.length, major ? 4 : seaProvs.length > 2 ? 1 : 0);
+    const airSites = air.get(owner) ?? [];
+    const seaSites = sea.get(owner) ?? [];
+    const nWings = Math.min(airSites.length, major ? 6 : airSites.length > 3 ? 2 : 1);
+    const nFlot = Math.min(seaSites.length, major ? 4 : seaSites.length > 2 ? 1 : 0);
 
+    // one wing per airfield, standing on the runway itself rather than at the
+    // middle of the province the runway happens to fall in
+    const pick = (sites: BaseSite[], i: number) =>
+      sites.length <= 1 ? sites[0] : sites[(i + Math.floor(rand() * sites.length)) % sites.length];
+
+    const usedAir = new Set<BaseSite>();
     for (let i = 0; i < nWings; i++) {
-      const province = airProvs[Math.floor(rand() * airProvs.length)];
+      let site = pick(airSites, i);
+      for (let t = 0; t < 8 && usedAir.has(site); t++) site = pick(airSites, i + t);
+      usedAir.add(site);
       scn.divisions.push({
         id: nextId++, owner, template: 'airwing',
-        name: `${i + 1} Air Wing`, province,
-        pos: at(province),
+        name: `${i + 1} Air Wing`, province: site.p,
+        pos: [site.lon, site.lat],
         strength: 0.9, org: 0.95, experience: major ? 0.2 : 0.05,
         path: [], progress: 0, attacking: null, entrenchment: 0,
       });
       wings++;
     }
+    const usedSea = new Set<BaseSite>();
     for (let i = 0; i < nFlot; i++) {
-      const province = seaProvs[Math.floor(rand() * seaProvs.length)];
+      let site = pick(seaSites, i);
+      for (let t = 0; t < 8 && usedSea.has(site); t++) site = pick(seaSites, i + t);
+      usedSea.add(site);
       scn.divisions.push({
         id: nextId++, owner, template: 'flotilla',
-        name: `${i + 1} Flotilla`, province,
-        pos: at(province),
+        name: `${i + 1} Flotilla`, province: site.p,
+        pos: [site.lon, site.lat],
         strength: 0.9, org: 0.95, experience: major ? 0.2 : 0.05,
         path: [], progress: 0, attacking: null, entrenchment: 0,
       });
@@ -315,7 +346,10 @@ export function applyOrderOfBattle(scn: Scenario, units: OobUnit[]): number {
       .find(([, n]) => n.name === countryName)?.[0];
     if (id === undefined) continue;
 
-    const mine = scn.divisions.filter((d) => d.owner === id);
+    // based forces stay where they are based: a real barracks name must not
+    // drag an air wing off its runway or a flotilla out of its harbour
+    const mine = scn.divisions.filter((d) => d.owner === id
+      && d.template !== 'airwing' && d.template !== 'flotilla' && d.template !== 'orbital');
     for (let i = 0; i < Math.min(mine.length, list.length); i++) {
       const real = list[i];
       const d = mine[i];
