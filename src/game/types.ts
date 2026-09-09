@@ -39,12 +39,32 @@ export const TERRAIN: Record<Terrain, { move: number; defence: number; label: st
   urban: { move: 1.3, defence: 0.45, label: 'Urban' },
 } as unknown as Record<Terrain, { move: number; defence: number; label: string }>;
 
-export type UnitKind =
-  | 'mechanised' | 'armoured' | 'light' | 'airborne' | 'marine' | 'territorial'
-  | 'airwing' | 'flotilla';
+/**
+ * Built-in unit kinds. Scenarios may define their own on top of these, so a
+ * kind is a plain string at the type level and these are the ones the base
+ * game ships with.
+ */
+export type UnitKind = string;
 
-/** Air and naval forces can only operate from an installation of their type. */
-export const BASED_AT: Partial<Record<UnitKind, 'air' | 'port'>> = {
+export type Domain = 'land' | 'air' | 'sea' | 'space';
+
+export const BUILTIN_KINDS = [
+  'mechanised', 'armoured', 'light', 'airborne', 'marine', 'territorial',
+  'airwing', 'flotilla', 'orbital',
+] as const;
+
+/** Which domain a template belongs to, for icons, basing and movement. */
+export const DOMAIN_OF: Record<string, Domain> = {
+  mechanised: 'land', armoured: 'land', light: 'land',
+  airborne: 'land', marine: 'land', territorial: 'land',
+  airwing: 'air', flotilla: 'sea', orbital: 'space',
+};
+
+/**
+ * Air and naval forces can only operate from an installation of their type.
+ * Space assets are not based on the ground at all: they are always on station.
+ */
+export const BASED_AT: Record<string, 'air' | 'port' | undefined> = {
   airwing: 'air',
   flotilla: 'port',
 };

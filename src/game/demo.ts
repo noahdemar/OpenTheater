@@ -27,11 +27,17 @@ export interface Stage {
   orbit?: boolean;
 }
 
-/** The theatre: the plain between the Baltic and the Carpathians. */
-const THEATRE: [number, number] = [24.2, 53.6];
-const THEATRE_RADIUS_DEG = 13;
+/**
+ * The theatre: the north Aegean around Lemnos.
+ *
+ * Deliberately small. A continental front makes a fine wide shot but nothing
+ * legible up close, whereas a single contested strait can be shown whole at
+ * every scale from the region down to the men on the beach.
+ */
+const THEATRE: [number, number] = [25.25, 39.9];
+const THEATRE_RADIUS_DEG = 3.2;
 /** brigades added to each frontier province, per side */
-const REINFORCE = 4;
+const REINFORCE = 5;
 /** how many of a province's formations join the assault */
 const ASSAULT_WAVE = 5;
 
@@ -110,8 +116,39 @@ export class Demo {
   }
 
   /** Reinforce both sides along the frontier and launch the offensive. */
+  /**
+   * Nobody is fighting in the Aegean when the scenario opens, so the set piece
+   * opens the war it is about to show: the two nations that share the most
+   * frontier inside the theatre.
+   */
+  private ensureWar(): void {
+    const { world, scn } = this;
+    const near = (id: number) => {
+      const p = world.province(id);
+      return Math.hypot(p.lon - THEATRE[0], (p.lat - THEATRE[1]) * 1.6) < THEATRE_RADIUS_DEG;
+    };
+    const shared = new Map<string, number>();
+    for (const [key] of world.borders) {
+      const [a, b] = key.split(':').map(Number);
+      if (!near(a) || !near(b)) continue;
+      const ca = scn.controller[a], cb = scn.controller[b];
+      if (ca === cb) continue;
+      const pair = ca < cb ? `${ca}:${cb}` : `${cb}:${ca}`;
+      shared.set(pair, (shared.get(pair) ?? 0) + 1);
+    }
+    const ranked = [...shared].sort((x, y) => y[1] - x[1]);
+    for (const [pair] of ranked) {
+      const [a, b] = pair.split(':').map(Number);
+      if (atWar(scn, a, b)) return;                 // a war is already running here
+    }
+    if (!ranked.length) return;
+    const [a, b] = ranked[0][0].split(':').map(Number);
+    scn.wars.add(a < b ? `${a}:${b}` : `${b}:${a}`);
+  }
+
   private setup(): { brigades: number; battles: number; frontKm: number } {
     const { world, scn } = this;
+    this.ensureWar();
     const near = (id: number) => {
       const p = world.province(id);
       return Math.hypot(p.lon - THEATRE[0], (p.lat - THEATRE[1]) * 1.6) < THEATRE_RADIUS_DEG;
@@ -337,18 +374,18 @@ export class Demo {
   private stages(): Stage[] {
     return [
       {
-        center: () => { const c = this.frontCentre(); return [c[0] - 6, c[1] - 1]; },
-        zoom: 3.1, pitch: 0, dwell: 4200, speed: 3, duration: 2600,
+        center: () => this.frontCentre(),
+        zoom: 6.4, pitch: 0, dwell: 4200, speed: 3, duration: 2600,
       },
       {
-        center: () => this.frontCentre(), zoom: 4.6, pitch: 0, bearing: 0, dwell: 4600, speed: 2, duration: 2600,
+        center: () => this.frontCentre(), zoom: 7.4, pitch: 0, bearing: 0, dwell: 4600, speed: 2, duration: 2600,
       },
       {
         center: () => { const f = this.battleFocus(); return [f[0] - 1.2, f[1] + 0.4]; },
-        zoom: 5.8, pitch: 0, bearing: -8, dwell: 4200, speed: 3, duration: 3200,
+        zoom: 8.4, pitch: 0, bearing: -8, dwell: 4200, speed: 3, duration: 3200,
       },
       {
-        center: this.denseFocus, zoom: 8.4, pitch: 25, bearing: -14, dwell: 5200, speed: 2, duration: 3200,
+        center: this.denseFocus, zoom: 10.2, pitch: 25, bearing: -14, dwell: 5200, speed: 2, duration: 3200,
       },
       {
         center: this.contactFocus, zoom: 11.6, pitch: 40, bearing: -22, dwell: 5200, speed: 1, duration: 3200,

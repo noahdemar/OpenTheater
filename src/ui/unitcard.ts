@@ -31,7 +31,8 @@ export class UnitCard {
         <div class="track"><div style="width:${Math.max(0, Math.min(1, v)) * 100}%;background:${color}"></div></div>
         <em>${pct(v)}</em></div>`;
     this.el.innerHTML = `
-      <div class="head" style="border-color:${marker.color}">
+      <div class="head">
+        <span class="dot" style="background:${marker.color}"></span>
         <div class="title">${u.name}</div>
         <div class="sub">${u.level === 0 ? 'BATTALION' : 'COMPANY'} · ${province.n} · ${d.name}</div>
       </div>
@@ -68,7 +69,8 @@ export class UnitCard {
     const battle = this.sim.battles.get(lead.province);
 
     this.el.innerHTML = `
-      <div class="head" style="border-color:${marker.color}">
+      <div class="head">
+        <span class="dot" style="background:${marker.color}"></span>
         <div class="title">${ds.length > 1 ? `${ds.length} divisions` : lead.name}</div>
         <div class="sub">${mine ? 'YOUR COMMAND' : 'FOREIGN UNIT'} · ${province.n} · ${terrain.label}</div>
       </div>

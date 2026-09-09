@@ -258,7 +258,15 @@ export class PoliticalLayer {
     this.rebuildFrontline();
   }
 
+  /** Colour overrides the editor paints on top of the live scenario. */
+  readonly overrides = new Map<number, string>();
+
   setProvinceOwner(id: number) {
+    const override = this.overrides.get(id);
+    if (override) {
+      this.map.setFeatureState({ source: 'provinces', id }, { color: override, occupied: false });
+      return;
+    }
     const nation = this.scn.nations.get(this.scn.controller[id]);
     const occupied = this.scn.controller[id] !== this.scn.owner[id];
     this.map.setFeatureState({ source: 'provinces', id }, {

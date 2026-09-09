@@ -16,7 +16,9 @@ export class TopBar {
               private onIndustry?: () => void,
               private onSave?: () => void,
               private onLoad?: () => void,
-              private canLoad?: () => boolean) {
+              private canLoad?: () => boolean,
+              private onEditor?: () => void,
+              private onConflicts?: () => void) {
     this.el = document.createElement('div');
     this.el.id = 'topbar';
     this.el.innerHTML = `
@@ -24,6 +26,8 @@ export class TopBar {
       <div class="nation"><select id="nation-pick"></select></div>
       <div class="stats"></div>
       <button class="industry" title="industry (shift+B)">INDUSTRY</button>
+      <button class="conflicts" title="model the world's ongoing armed conflicts (W)">WORLD CONFLICTS</button>
+      <button class="editor" title="scenario editor (E)">SCENARIO EDITOR</button>
       <button class="save" title="save (S)">SAVE</button>
       <button class="load" title="load (L)">LOAD</button>
       <button class="demo" title="run the set-piece battle (D)">▶ DEMO</button>
@@ -47,6 +51,8 @@ export class TopBar {
     this.el.querySelector<HTMLButtonElement>('.demo')!.onclick = () => this.onDemo?.();
     this.el.querySelector<HTMLButtonElement>('.industry')!.onclick = () => this.onIndustry?.();
     this.el.querySelector<HTMLButtonElement>('.save')!.onclick = () => { this.onSave?.(); this.syncLoad(); };
+    this.el.querySelector<HTMLButtonElement>('.editor')!.onclick = () => this.onEditor?.();
+    this.el.querySelector<HTMLButtonElement>('.conflicts')!.onclick = () => this.onConflicts?.();
     const load = this.el.querySelector<HTMLButtonElement>('.load')!;
     load.onclick = () => this.onLoad?.();
     this.syncLoad();
@@ -67,6 +73,21 @@ export class TopBar {
   private syncLoad() {
     const load = this.el.querySelector<HTMLButtonElement>('.load');
     if (load) load.disabled = !(this.canLoad?.() ?? false);
+  }
+
+  /** Rebuild the nation list, after the editor adds new ones. */
+  refreshNations() {
+    const pick = this.el.querySelector<HTMLSelectElement>('#nation-pick');
+    if (!pick) return;
+    const current = pick.value;
+    pick.innerHTML = '';
+    for (const n of [...this.scn.nations.values()].filter((x) => x.playable)) {
+      const o = document.createElement('option');
+      o.value = String(n.id);
+      o.textContent = n.name;
+      pick.appendChild(o);
+    }
+    pick.value = current;
   }
 
   private syncSpeed() {

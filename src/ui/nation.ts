@@ -41,7 +41,8 @@ export class NationPanel {
         : '<button data-act="war" class="danger">Declare war</button>';
 
     this.el.innerHTML = `
-      <div class="head" style="border-color:${nation.color}">
+      <div class="head">
+        <span class="dot" style="background:${nation.color}"></span>
         <div class="title">${nation.name}</div>
         <div class="sub">${bloc ? bloc.name : 'Unaligned'}${war ? ' · AT WAR WITH YOU' : ''}</div>
       </div>

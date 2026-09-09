@@ -62,6 +62,13 @@ function drawSymbol(ctx: CanvasRenderingContext2D, kind: UnitKind, w: number, h:
       ctx.quadraticCurveTo(w / 2, h - pad + 1, w - pad - 1, h / 2);
       break;
     }
+    case 'orbital': {                   // an orbit around a body
+      ctx.ellipse(w / 2, h / 2, w / 2 - pad - 2, h / 2 - pad - 1, -0.35, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, 2.2, 0, Math.PI * 2);
+      break;
+    }
     case 'flotilla': {                  // a hull on the water
       ctx.moveTo(pad, h / 2 - 1);
       ctx.lineTo(w - pad, h / 2 - 1);
@@ -239,6 +246,18 @@ function drawPicture(ctx: CanvasRenderingContext2D, kind: UnitKind, w: number, h
       ctx.lineTo(cx - 1.6, cy - 1.5);
       ctx.closePath();
       ctx.fill();
+      break;
+    }
+    case 'orbital': {                           // satellite on station
+      ctx.beginPath();                                    // body
+      ctx.ellipse(w / 2, h / 2, 3.2, 3.2, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();                                    // solar wings
+      ctx.moveTo(w / 2 - 4, h / 2); ctx.lineTo(w / 2 - 10, h / 2);
+      ctx.moveTo(w / 2 + 4, h / 2); ctx.lineTo(w / 2 + 10, h / 2);
+      ctx.stroke();
+      ctx.strokeRect(w / 2 - 10, h / 2 - 2.6, 4, 5.2);
+      ctx.strokeRect(w / 2 + 6, h / 2 - 2.6, 4, 5.2);
       break;
     }
     case 'flotilla': {                          // warship

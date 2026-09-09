@@ -13,7 +13,7 @@ import type { Division, UnitKind } from './types';
  */
 
 /** Equipment cost of one formation. */
-export const COST: Record<UnitKind, number> = {
+export const COST: Record<string, number> = {
   territorial: 45,
   light: 70,
   airborne: 100,
@@ -22,11 +22,13 @@ export const COST: Record<UnitKind, number> = {
   armoured: 200,
   airwing: 240,
   flotilla: 280,
+  orbital: 420,
 };
 
 /** What a player can put in the queue, in the order they are offered. */
 export const BUILDABLE: UnitKind[] = [
-  'light', 'mechanised', 'armoured', 'airborne', 'marine', 'territorial', 'airwing', 'flotilla',
+  'light', 'mechanised', 'armoured', 'airborne', 'marine', 'territorial',
+  'airwing', 'flotilla', 'orbital',
 ];
 
 export interface BuildOrder {
@@ -49,11 +51,27 @@ export class Production {
   private nextOrder = 1;
   private nextDivision: number;
 
+  private capitalOf: (nation: number) => number;
+
   constructor(private scn: Scenario, capitalOf: (nation: number) => number) {
+    this.capitalOf = capitalOf;
+    this.nextDivision = Math.max(0, ...scn.divisions.map((d) => d.id)) + 1;
+    this.reseed(scn);
+  }
+
+  /** Give every nation an industry, after the world has been rebuilt. */
+  reseed(scn: Scenario) {
+    this.byNation.clear();
     this.nextDivision = Math.max(0, ...scn.divisions.map((d) => d.id)) + 1;
     for (const [id] of scn.nations) {
-      this.byNation.set(id, { stockpile: 60, queue: [], deploy: capitalOf(id) });
+      this.byNation.set(id, { stockpile: 60, queue: [], deploy: this.capitalOf(id) });
     }
+  }
+
+  /** A single nation joining an existing world, from the editor. */
+  addNation(id: number) {
+    if (this.byNation.has(id)) return;
+    this.byNation.set(id, { stockpile: 60, queue: [], deploy: this.capitalOf(id) });
   }
 
   /** Equipment produced per day. */

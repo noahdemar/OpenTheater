@@ -9,7 +9,10 @@ import { registerMapImages } from './map/images';
 import { UnitOverlay } from './map/units';
 import { World } from './game/world';
 import { RoadNetwork } from './game/roads';
-import { applyOrderOfBattle, atWar, buildScenario, considerPeace, garrisonBases } from './game/scenario';
+import {
+  applyOrderOfBattle, atWar, buildScenario, considerPeace, garrisonBases, type OobUnit,
+} from './game/scenario';
+import { clearWorld, resetWorld } from './editor/world';
 import { Installations } from './game/installations';
 import { AirOperations } from './game/air';
 import { ArmyStore } from './game/armies';
@@ -25,6 +28,14 @@ import { Demo } from './game/demo';
 import { LayersPanel } from './ui/layers';
 import { NationPanel } from './ui/nation';
 import { hasSave, loadGame, saveGame, savedAt } from './game/save';
+import { Conflicts, annualDeaths, applyConflicts, type ConflictModel, type ConflictRecord } from './game/conflicts';
+import { ConflictLayer } from './map/conflicts';
+import { ConflictPanel } from './ui/conflicts';
+import { MISSIONS, Satellites, footprintKm } from './game/satellites';
+import { SatelliteLayer } from './map/satellites';
+import { closeable } from './ui/close';
+import { EditorModel } from './editor/model';
+import { EditorPanel } from './editor/panel';
 import { EventLog } from './ui/events';
 import { TopBar } from './ui/topbar';
 import { UnitCard } from './ui/unitcard';
@@ -68,25 +79,28 @@ new ResizeObserver(() => map.resize()).observe(container);
 
 async function boot() {
   const world = await World.load();
-  const scn = buildScenario(world.data);
 
-  // air and naval forces exist only where there is somewhere to base them
+  // air and naval forces exist only where there is somewhere to base them, and
+  // the army starts in its barracks
   const installations = await Installations.load();
+  const scn = buildScenario(world.data, installations.all.filter((i) => i.t === 'base'));
   const based = garrisonBases(
     scn,
     installations.all.filter((i) => i.t === 'air'),
     installations.all.filter((i) => i.t === 'port'),
-    (province) => [world.province(province).lon, world.province(province).lat],
   );
   console.log(`[bases] ${JSON.stringify(installations.counts)} -> ${based.wings} air wings, ${based.flotillas} flotillas`);
   const air = new AirOperations(installations);
 
-  // real names and garrisons, where Wikidata knows them
+  // real names and garrisons, where Wikidata knows them. Kept around so the
+  // world can be rebuilt from scratch without reloading the page.
+  let oobUnits: OobUnit[] = [];
   try {
     const base = import.meta.env.BASE_URL || '/';
     const oob = await fetch(`${base}data/oob.json`, { cache: 'no-store' }).then((r) => r.json());
-    const applied = applyOrderOfBattle(scn, oob.units);
-    console.log(`[oob] ${applied} formations given real identities from ${oob.units.length} records`);
+    oobUnits = oob.units as OobUnit[];
+    const applied = applyOrderOfBattle(scn, oobUnits);
+    console.log(`[oob] ${applied} formations given real identities from ${oobUnits.length} records`);
   } catch (err) {
     console.warn('[oob] unavailable, formations stay procedural', err);
   }
@@ -98,6 +112,83 @@ async function boot() {
 
   const overlays = new Overlays(map);
   overlays.add();
+
+  // --- space ---------------------------------------------------------------
+  // Satellites are not units on the ground: they are on orbits, and what they
+  // give a commander is coverage. Each one carries the patch of earth it can
+  // currently see.
+  const satellites = new Satellites();
+  for (const n of scn.nations.values()) {
+    if (n.playable) satellites.launch(n.id, n.tag, 'major');
+  }
+  const satLayer = new SatelliteLayer(map, satellites,
+    (owner) => scn.nations.get(owner)?.color ?? '#9fb2c4');
+  satLayer.add();
+  satLayer.trackOwner = playerId;
+
+  // --- the real world -------------------------------------------------------
+  // The shipped scenario is an invention. This is the alternative: the wars
+  // that are actually being fought, with their real participants and their
+  // real death tolls, loaded from Wikipedia's list of ongoing armed conflicts.
+  const conflictLayer = new ConflictLayer(map);
+  conflictLayer.add();
+  let conflicts: Conflicts | null = null;
+  let conflictModel: ConflictModel | null = null;
+
+  const focusConflict = (c: ConflictRecord) => {
+    const st = conflictModel?.states.find((x) => x.record.id === c.id);
+    const provs = st?.provinces ?? [];
+    if (!provs.length) return;
+    let west = 180, east = -180, south = 90, north = -90;
+    for (const id of provs) {
+      const p = world.province(id);
+      west = Math.min(west, p.lon); east = Math.max(east, p.lon);
+      south = Math.min(south, p.lat); north = Math.max(north, p.lat);
+    }
+    map.fitBounds([[west, south], [east, north]], { padding: 120, maxZoom: 7, duration: 1200 });
+    const dead = annualDeaths(c);
+    hud.setStatus(`${c.name} — ${c.countries.join(', ')}${dead ? ` · ${dead.toLocaleString()} killed in the latest year on record` : ''}`);
+  };
+
+  const conflictPanel = new ConflictPanel(
+    // the panel is built lazily, once the data is in; this proxy stands in
+    // until then so the HUD can be assembled in one place
+    new Proxy({} as Conflicts, { get: (_t, k) => (conflicts as never)?.[k as never] }),
+    focusConflict);
+
+  /**
+   * Switch the world over to the real geopolitical picture. The invented blocs
+   * and their world war are dropped, real wars are declared between the real
+   * belligerents, and armed movements are raised on the ground they hold.
+   */
+  const toggleConflictModel = async () => {
+    if (!conflicts) {
+      try {
+        conflicts = await Conflicts.load();
+      } catch (err) {
+        hud.setStatus('conflict data unavailable — run `node tools/conflicts.mjs`');
+        console.warn('[conflicts]', err);
+        return;
+      }
+    }
+    if (conflictModel) {                       // already applied: just show/hide
+      conflictPanel.toggle();
+      return;
+    }
+    conflictModel = applyConflicts(scn, world, conflicts);
+    conflictLayer.apply(conflictModel, (tier) => conflicts!.tier(tier as never).color);
+    for (const d of scn.divisions) sim.byId.set(d.id, d);
+    political.refreshAll();
+    political.rebuildFrontline();
+    overlay.rebuildHierarchy();
+    overlay.rebuild();
+    overlay.draw();
+    bar.refreshNations();
+    conflictPanel.toggle(true);
+    const armed = conflictModel.states.length;
+    hud.setStatus(`Conflict model: ${armed} ongoing conflicts, ${conflictModel.nonStateNations.length} armed movements, ${scn.wars.size} wars`);
+    console.log(`[conflicts] ${armed} conflicts, ${scn.wars.size} wars, ${scn.divisions.length} formations`);
+  };
 
   const plans = new PlanStore();
 
@@ -177,11 +268,13 @@ async function boot() {
   const bar = new TopBar(sim, scn, () => playerId, (id) => {
     playerId = id;
     overlay.playerId = id;
+    satLayer.trackOwner = id;
     sim.playerNation = id;
     tech.render();
     bar.update();
   }, () => { demo.running ? demo.stop() : demo.start(); }, () => industry.toggle(),
-     () => doSave(), () => doLoad(), () => hasSave());
+     () => doSave(), () => doLoad(), () => hasSave(), () => editor.toggle(),
+     () => toggleConflictModel());
 
   /**
    * Globe or flat map. The counters live on a canvas above the map, so the
@@ -193,6 +286,14 @@ async function boot() {
     overlay.globe = on;
     if (on && map.getZoom() > 5.5) map.easeTo({ zoom: 3.4, duration: 900 });
     overlay.draw();
+  };
+
+  /** Footprints are a sub-layer of the satellites: both switches must agree. */
+  const applyFootprintToggle = () => {
+    const on = layers.get('satellites') && layers.get('satfootprints');
+    for (const l of ['satellites/footprint', 'satellites/footprint-edge']) {
+      if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none');
+    }
   };
 
   const layers = new LayersPanel((id, on) => {
@@ -212,6 +313,12 @@ async function boot() {
       case 'nato': overlay.iconStyle = on ? 'nato' : 'pictorial'; break;
       case 'globe': setGlobe(on); break;
       case 'plans': overlay.showPlans = on; break;
+      case 'satellites':
+        satLayer.setVisible(on);
+        applyFootprintToggle();
+        break;
+      case 'satfootprints': applyFootprintToggle(); break;
+      case 'conflictzones': conflictLayer.visible = on; break;
     }
     overlay.draw();
   });
@@ -243,7 +350,9 @@ async function boot() {
   });
 
   document.getElementById('hud')!.append(
-    bar.el, card.el, tech.el, layers.el, nationPanel.el, industry.el, armyBar.el, events.el);
+    bar.el, card.el, tech.el, layers.el, nationPanel.el, industry.el, armyBar.el, events.el,
+    conflictPanel.el);
+
 
   // --- the set piece --------------------------------------------------------
   const demo = new Demo(map, world, scn, sim, plans, {
@@ -362,11 +471,32 @@ async function boot() {
   });
 
   map.on('click', (e) => {
+    // the editor owns the map while it is painting or placing
+    if (editor.open && (paintNation || placingNode)) {
+      const province = provinceAt(e.point.x, e.point.y);
+      // the province itself is repainted by the paint hook; a full refresh of
+      // every province on every brush stroke is wasted work
+      if (province != null && editor.placeAt(province)) { overlay.draw(); return; }
+    }
+
     // drawing a plan swallows clicks until the line is finished
     if (plans.draft) {
       plans.addPoint(e.lngLat.lng, e.lngLat.lat);
       overlay.draw();
       return;
+    }
+
+    // a satellite sits above everything else on the map, so it is asked first
+    if (satLayer.visible) {
+      const sat = satLayer.hitTest(e.point.x, e.point.y);
+      if (sat) {
+        const spec = MISSIONS[sat.mission];
+        const owner = scn.nations.get(sat.owner)?.name ?? 'unknown';
+        hud.setStatus(`${sat.name} · ${owner} · ${spec.role} · ${sat.altitudeKm.toLocaleString()} km, `
+          + `${sat.inclinationDeg.toFixed(1)}° inclination · ${Math.round(sat.periodMin)} min period · `
+          + `${Math.round(footprintKm(sat.altitudeKm)).toLocaleString()} km footprint radius`);
+        return;
+      }
     }
 
     // left click selects, and nothing else
@@ -516,6 +646,8 @@ async function boot() {
     if (e.key === 'p' || e.key === 'P') { layers.toggle('political'); return; }
     if (e.key === 'n' || e.key === 'N') { layers.toggle('nato'); return; }
     if (e.key === 'g' || e.key === 'G') { layers.toggle('globe'); return; }
+    if (e.key === 'e' || (e.key === 'E' && !e.shiftKey)) { editor.toggle(); return; }
+    if (e.key === 'w' || e.key === 'W') { void toggleConflictModel(); return; }
     if ((e.key === 's' || e.key === 'S') && !e.metaKey && !e.ctrlKey) { doSave(); return; }
     if ((e.key === 'l' || e.key === 'L') && !e.metaKey && !e.ctrlKey) { doLoad(); return; }
     if (e.key === 'c' || e.key === 'C') {
@@ -528,8 +660,12 @@ async function boot() {
       return;
     }
     if (e.key === 'u' || e.key === 'U') { layers.toggle('units'); return; }
+    if (e.key === 'k' || e.key === 'K') { layers.toggle('satellites'); return; }
     if (e.code === 'Space') { e.preventDefault(); sim.speed = sim.speed ? 0 : 2; bar.update(); }
     if (e.key >= '1' && e.key <= '5') { sim.speed = Number(e.key); bar.update(); }
+    if (e.key === 'Y' && e.shiftKey) { layers.el.hidden = !layers.el.hidden; return; }
+    if (e.key === 'A' && e.shiftKey) { armyBar.el.hidden = !armyBar.el.hidden; return; }
+    if (e.key === 'E' && e.shiftKey) { events.el.hidden = !events.el.hidden; return; }
     if (e.key === 't' || e.key === 'T') tech.toggle();
     if (e.key === 'b' && e.shiftKey) { industry.toggle(); return; }
     if (e.key === 'Escape') {
@@ -541,11 +677,132 @@ async function boot() {
         overlay.draw();
         return;
       }
+      // Escape peels one layer at a time: first the top panel, then selection
+      if (closeTopPanel()) return;
       overlay.selected.clear(); overlay.selectedUnits.clear();
-      political.setSelected([]); card.clear(); tech.toggle(false); industry.toggle(false);
+      political.setSelected([]);
       setFollowing(false);
     }
   });
+
+  // --- scenario editor ------------------------------------------------------
+  const editorModel = new EditorModel();
+  let paintNation: string | null = null;
+  let placingNode: string | null = null;
+
+  /** Everything that has to be rebuilt when the world is replaced wholesale. */
+  const afterWorldChange = () => {
+    overlay.selected.clear();
+    overlay.selectedUnits.clear();
+    political.setSelected([]);
+    political.refreshAll();
+    political.rebuildFrontline();
+    overlay.rebuildHierarchy();
+    overlay.rebuild();
+    overlay.draw();
+    card.clear();
+    nationPanel.clear();
+    events.clear();
+    armyBar.render();
+    industry.render();
+    bar.refreshNations();
+    bar.update();
+  };
+
+  const editor = new EditorPanel(editorModel, {
+    provinceName: (id) => world.province(id)?.n ?? '—',
+    onPaintNation: (tag) => {
+      paintNation = tag;
+      map.getCanvas().style.cursor = tag ? 'crosshair' : '';
+    },
+    // paint shows up under the brush, not when the scenario is applied later
+    onPaintedProvince: (province, color) => {
+      if (color) political.overrides.set(province, color);
+      else political.overrides.delete(province);
+      political.setProvinceOwner(province);
+    },
+    onPlaceNode: (id) => { placingNode = id; },
+    status: (text) => hud.setStatus(text),
+    worldSummary: () => ({
+      nations: scn.nations.size,
+      divisions: scn.divisions.length,
+      owned: scn.controller.reduce((n, c) => n + (c >= 0 ? 1 : 0), 0),
+    }),
+    onClearWorld: () => {
+      clearWorld({ scn, sim, armies, plans, production });
+      political.overrides.clear();
+      playerId = -1;
+      overlay.playerId = -1;
+      sim.playerNation = -1;
+      afterWorldChange();
+      hud.setStatus('world cleared — build nations, paint their ground, then apply');
+    },
+    onResetWorld: () => {
+      political.overrides.clear();
+      const r = resetWorld(
+        { scn, sim, armies, plans, production },
+        world.data, installations, oobUnits,
+      );
+      const first = [...scn.nations.values()].find((n) => n.tag === 'GER')
+        ?? [...scn.nations.values()][0];
+      playerId = first?.id ?? -1;
+      overlay.playerId = playerId;
+      sim.playerNation = playerId;
+      for (const d of scn.divisions) if (d.template === 'airwing') air.station(d);
+      afterWorldChange();
+      hud.setStatus(`scenario reset · ${r.nations} nations · ${r.divisions} formations`);
+    },
+    onCommit: () => {
+      let nextId = Math.max(0, ...scn.divisions.map((d) => d.id)) + 1;
+      const r = editorModel.commit(scn, () => nextId++, (p) =>
+        [world.province(p).lon, world.province(p).lat]);
+      // a freshly built world needs someone to play
+      if (playerId < 0) {
+        const mine = [...scn.nations.values()].find((n) => editorModel.nations.some((c) => c.tag === n.tag));
+        if (mine) { playerId = mine.id; overlay.playerId = mine.id; sim.playerNation = mine.id; }
+      }
+      for (const [id] of scn.nations) production.addNation(id);
+      // the paint preview has become the real thing; drop the overrides so the
+      // map goes back to reading the scenario
+      political.overrides.clear();
+      afterWorldChange();
+      hud.setStatus(
+        `scenario applied · ${r.nations} nations · ${r.provinces} provinces · ${r.units} formations`);
+    },
+  });
+  document.getElementById('hud')!.append(editor.el);
+
+  /**
+   * Every panel closes, and every panel can be brought back. Escape closes the
+   * top one; the shortcut in each entry reopens it.
+   */
+  // Ordered by how readily Escape should close them: the standing chrome
+  // first, the dialogs the player just opened last.
+  const panels: { name: string; el: HTMLElement; set: (on: boolean) => void; key: string }[] = [
+    { name: 'Layers', el: layers.el, set: (on) => { layers.el.hidden = !on; }, key: 'Shift+Y' },
+    { name: 'Armies', el: armyBar.el, set: (on) => { armyBar.el.hidden = !on; }, key: 'Shift+A' },
+    { name: 'Events', el: events.el, set: (on) => { events.el.hidden = !on; }, key: 'Shift+E' },
+    { name: 'Unit', el: card.el, set: (on) => { if (!on) card.clear(); }, key: 'click a formation' },
+    { name: 'Nation', el: nationPanel.el, set: (on) => { if (!on) nationPanel.clear(); }, key: 'click a nation' },
+    { name: 'Research', el: tech.el, set: (on) => tech.toggle(on), key: 'T' },
+    { name: 'Industry', el: industry.el, set: (on) => industry.toggle(on), key: 'Shift+B' },
+    { name: 'World Conflicts', el: conflictPanel.el, set: (on) => conflictPanel.toggle(on), key: 'W' },
+    { name: 'Scenario Editor', el: editor.el, set: (on) => editor.toggle(on), key: 'E' },
+  ];
+  for (const p of panels) {
+    closeable(p.el, () => {
+      p.set(false);
+      hud.setStatus(`${p.name} closed — ${p.key.length > 3 ? p.key : `press ${p.key}`} to bring it back`);
+    });
+  }
+  /** Close the panel the eye would call the top one: the last one opened. */
+  const closeTopPanel = (): boolean => {
+    const open = panels.filter((p) => !p.el.hidden);
+    const top = open[open.length - 1];
+    if (!top) return false;
+    top.set(false);
+    return true;
+  };
 
   // --- saving ---------------------------------------------------------------
   const applyLoadedState = () => {
@@ -618,6 +875,7 @@ async function boot() {
   let sinceRebuild = 0;
   let sinceUi = 0;
   let sinceFront = 0;
+  let sinceSats = 0;
   const frame = (now: number) => {
     const dt = Math.min(0.25, (now - last) / 1000);
     last = now;
@@ -634,6 +892,11 @@ async function boot() {
         overlay.rebuildHierarchy();
       });
     }
+    if (elapsedDays > 0) satellites.step(elapsedDays * 24);
+    // a footprint is thousands of kilometres across; redrawing it sixty times
+    // a second buys nothing, so the orbits are painted a few times a second
+    sinceSats += dt;
+    if (sinceSats > 0.2) { satLayer.update(); sinceSats = 0; }
     overlay.tick(dt);
     followStep();
     sinceRebuild += dt;
@@ -697,7 +960,8 @@ async function boot() {
 
   Object.assign(window as unknown as Record<string, unknown>,
     { map, world, scn, sim, overlay, plans, overlays, layers, demo, political,
-      installations, production, armies, air });
+      installations, production, armies, air, editor, editorModel,
+      satellites, satLayer, conflictLayer });
   document.body.dataset.ready = '1';
 }
 
