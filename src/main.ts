@@ -182,8 +182,9 @@ async function boot() {
       conflictPanel.toggle();
       return;
     }
-    conflictModel = applyConflicts(scn, world, conflicts);
+    conflictModel = applyConflicts(scn, world, conflicts, zones);
     conflictLayer.apply(conflictModel, (tier) => conflicts!.tier(tier as never).color);
+    political.rebuildZones();
     for (const d of scn.divisions) sim.byId.set(d.id, d);
     political.refreshAll();
     political.rebuildFrontline();

@@ -41,6 +41,9 @@ function zoneCount(areaDeg2: number): number {
   return Math.max(4, Math.min(24, Math.round(Math.sqrt(areaDeg2) * 9)));
 }
 
+/** The most zones a province may be cut into when extra detail is asked for. */
+const MAX_DETAIL = 90;
+
 /** Deterministic from the province id alone, so every client agrees. */
 function rng(seed: number) {
   let s = (seed * 0x9e3779b1) | 0;
@@ -78,6 +81,23 @@ export class Zones {
   private outline = new Map<number, Ring[]>();
   /** zone id -> the nation holding it, where that differs from the province */
   readonly controller = new Map<string, number>();
+  /**
+   * Provinces that want finer ground than their area alone would give them.
+   *
+   * A front runs through a cell at a scale the default cut cannot resolve: a
+   * town five kilometres behind the line lands in whichever twenty-kilometre
+   * zone happens to claim it. Asking for detail where a real line of contact
+   * runs fixes that without cutting up the whole world.
+   */
+  private detail = new Map<number, number>();
+
+  /** Ask for this province to be cut more finely. Must precede the first cut. */
+  refine(province: number, zones: number) {
+    const want = Math.min(MAX_DETAIL, Math.max(this.detail.get(province) ?? 0, zones));
+    if (this.detail.get(province) === want) return;
+    this.detail.set(province, want);
+    this.byProvince.delete(province);          // recut on next use
+  }
 
   constructor(private world: World) {}
 
@@ -115,7 +135,7 @@ export class Zones {
       if (x < minX) minX = x; if (x > maxX) maxX = x;
       if (y < minY) minY = y; if (y > maxY) maxY = y;
     }
-    const n = zoneCount(Math.abs(ringArea(main)));
+    const n = this.detail.get(province) ?? zoneCount(Math.abs(ringArea(main)));
     const rand = rng(province + 1);
 
     // scatter seeds inside the province, then relax so they spread out evenly

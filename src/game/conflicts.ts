@@ -21,6 +21,8 @@ import type { Scenario } from './scenario';
 import { warKey } from './scenario';
 import type { World } from './world';
 import type { Division, Nation, UnitKind } from './types';
+import { applyUkraine } from './ukraine';
+import type { Zones } from './zones';
 import { rng } from './rng';
 
 export type Tier = 'major' | 'minor' | 'conflict' | 'skirmish';
@@ -191,7 +193,9 @@ export interface ConflictModel {
  * scenario object is edited in place so every reference the running game holds
  * to it stays valid.
  */
-export function applyConflicts(scn: Scenario, world: World, conflicts: Conflicts): ConflictModel {
+export function applyConflicts(
+  scn: Scenario, world: World, conflicts: Conflicts, zones: Zones | null = null,
+): ConflictModel {
   const rand = rng(1948);
   const byName = new Map<string, number>();
   for (const [id, n] of scn.nations) byName.set(n.name, id);
@@ -219,6 +223,8 @@ export function applyConflicts(scn: Scenario, world: World, conflicts: Conflicts
 
   const states: ConflictState[] = [];
   const nonStateNations: number[] = [];
+  /** conflicts that laid in their own forces and want no generic ones */
+  const detailed = new Set<string>();
   const claimed = new Set<number>();          // provinces already given to a movement
 
   for (const record of conflicts.all) {
@@ -241,6 +247,26 @@ export function applyConflicts(scn: Scenario, world: World, conflicts: Conflicts
         }
       }
       for (const a of sides[0]) for (const b of sides[1]) scn.wars.add(warKey(a.id, b.id));
+
+      // The war everyone will look at first is not left to the generator: its
+      // ground, its line of contact and its order of battle are laid in by
+      // hand, and the generic force pass below is skipped for it.
+      if (record.id === 'russo-ukrainian-war') {
+        const ru = sides[0][0]?.id, ua = sides[1][0]?.id;
+        if (ru !== undefined && ua !== undefined) {
+          detailed.add(record.id);
+          const laid = applyUkraine(scn, world, zones, ua, ru);
+          console.log(`[ukraine] ${laid.provincesOccupied} provinces and ${laid.zonesOccupied} zones occupied, `
+            + `${laid.ukrainian} Ukrainian and ${laid.russian} Russian formations`);
+          // the occupied ground now belongs to the other side, so recount
+          provincesOf.clear();
+          for (const p of world.provinces) {
+            const list = provincesOf.get(scn.controller[p.id]) ?? [];
+            list.push(p.id);
+            provincesOf.set(scn.controller[p.id], list);
+          }
+        }
+      }
       for (const s of [...sides[0], ...sides[1]]) provinces.push(...(provincesOf.get(s.id) ?? []));
     } else {
       // a government against an armed movement: the state or states named are
@@ -287,6 +313,7 @@ export function applyConflicts(scn: Scenario, world: World, conflicts: Conflicts
 
   // forces: enough on each side to hold a front, placed on the ground it holds
   for (const st of states) {
+    if (detailed.has(st.record.id)) continue;
     const n = Math.max(1, Math.round(FORCE[st.record.tier]));
     for (const side of st.sides) {
       for (const b of side) {

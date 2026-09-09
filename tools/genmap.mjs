@@ -644,6 +644,52 @@ const outProvinces = provinces.map((pv, id) => {
   };
 });
 
+// ------------------------------------------------------------------ islands --
+//
+// Islands too small to justify a province of their own were dropped, which
+// left real land missing from the map: a coastline with holes in it, and no
+// ground under Lemnos or the Aegean or the Hebrides. They are put back as
+// geometry rather than as provinces - each one joins the nearest province of
+// its own country as another part of a multipolygon - so the borders include
+// them without adding a single cell to the province graph, the frontline
+// index, or the command hierarchy, all of which scale with province count.
+{
+  const centre = (rings) => {
+    let x = 0, y = 0;
+    for (const [px, py] of rings[0]) { x += px; y += py; }
+    return [x / rings[0].length, y / rings[0].length];
+  };
+  // an island of a few square kilometres is a rock; below this it is not worth
+  // the bytes it would cost every client to download
+  const MIN_KEEP_KM2 = 8;
+  const byCountry = new Map();
+  provinces.forEach((pv, id) => {
+    const list = byCountry.get(pv.country) ?? [];
+    list.push(id);
+    byCountry.set(pv.country, list);
+  });
+
+  let added = 0, rocks = 0;
+  countries.forEach((c, ci) => {
+    const home = byCountry.get(ci);
+    if (!home?.length) return;
+    const anchors = home.map((id) => ({ id, at: centre(provinces[id].parts[0]) }));
+    for (const poly of c.polys) {
+      if (c.kept.includes(poly)) continue;              // already has provinces
+      if (poly.km2 < MIN_KEEP_KM2) { rocks++; continue; }
+      const [ix, iy] = centre(poly.rings);
+      let best = anchors[0], bestD = Infinity;
+      for (const a of anchors) {
+        const d = (a.at[0] - ix) ** 2 + (a.at[1] - iy) ** 2;
+        if (d < bestD) { bestD = d; best = a; }
+      }
+      provinces[best.id].parts.push(poly.rings);
+      added++;
+    }
+  });
+  console.log(`islands    ${added} attached to existing provinces, ${rocks} rocks under ${MIN_KEEP_KM2} km2 skipped`);
+}
+
 // GeoJSON for the renderer: one feature per province, geometry in WGS84
 const geojson = {
   type: 'FeatureCollection',
