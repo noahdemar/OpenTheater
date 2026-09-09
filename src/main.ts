@@ -316,7 +316,7 @@ async function boot() {
         }
         break;
       case 'frontline':
-        for (const l of ['frontline/glow', 'frontline/band', 'frontline/line']) {
+        for (const l of ['frontline/glow', 'frontline/band', 'frontline/teeth', 'frontline/line']) {
           map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none');
         }
         break;

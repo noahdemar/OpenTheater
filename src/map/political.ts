@@ -354,6 +354,29 @@ export class PoliticalLayer {
           12, ['*', ['get', 'dir'], 14]] as never,
       },
     });
+    // Teeth along each side's band, facing out over its own ground: the
+    // sawtooth a front has been drawn with on operations maps for a century.
+    // A dashed wide line laid just outside the band gives the blocks without
+    // needing a tooth generated for every metre of a front thousands of
+    // kilometres long, and it keeps step with the band at every zoom because
+    // both are offset in the same screen pixels.
+    map.addLayer({
+      id: 'frontline/teeth',
+      type: 'line',
+      source: 'frontline',
+      filter: ['==', ['get', 'band'], 1],
+      layout: { 'line-cap': 'butt', 'line-join': 'round' },
+      paint: {
+        'line-color': ['get', 'color'] as never,
+        'line-width': ['interpolate', ['linear'], ['zoom'], 2, 3.4, 6, 6, 12, 10] as never,
+        'line-opacity': ['interpolate', ['linear'], ['zoom'], 2, 0.5, 5, 0.72, 12, 0.8] as never,
+        'line-dasharray': [0.55, 1.5] as never,
+        'line-offset': ['interpolate', ['linear'], ['zoom'],
+          2, ['*', ['get', 'dir'], 6.2],
+          6, ['*', ['get', 'dir'], 12],
+          12, ['*', ['get', 'dir'], 21]] as never,
+      },
+    });
     map.addLayer({
       id: 'frontline/line',
       type: 'line',
@@ -361,9 +384,9 @@ export class PoliticalLayer {
       filter: ['==', ['get', 'band'], 0],
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
-        'line-color': '#140b08',
-        'line-width': ['interpolate', ['linear'], ['zoom'], 2, 1.2, 6, 2, 12, 3.2] as never,
-        'line-opacity': 0.8,
+        'line-color': '#120a07',
+        'line-width': ['interpolate', ['linear'], ['zoom'], 2, 1.4, 6, 2.4, 12, 3.8] as never,
+        'line-opacity': 0.88,
       },
     });
 

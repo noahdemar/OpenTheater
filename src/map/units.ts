@@ -44,6 +44,79 @@ export interface Marker {
 const COUNTER_ECHELON: Echelon[] = ['group', 'army', 'corps', 'brigade', 'battalion', 'company'];
 const LEVELS = LADDER.map((l) => ({ ...l, echelon: COUNTER_ECHELON[l.level] }));
 
+type Px = { x: number; y: number };
+
+/** Total length of a screen-space polyline, in pixels. */
+function pathLength(pts: Px[]): number {
+  let n = 0;
+  for (let i = 1; i < pts.length; i++) n += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  return n;
+}
+
+/**
+ * Centripetal Catmull-Rom through the clicked points.
+ *
+ * A plan is drawn by clicking, so its raw geometry is a few straight legs with
+ * hard corners. Operational arrows are swept curves; this is what turns one
+ * into the other without letting the curve overshoot the points the player
+ * actually chose.
+ */
+function smoothPath(pts: Px[], perSegment = 8): Px[] {
+  if (pts.length < 3) return pts;
+  const out: Px[] = [pts[0]];
+  const at = (i: number) => pts[Math.max(0, Math.min(pts.length - 1, i))];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+    for (let k = 1; k <= perSegment; k++) {
+      const t = k / perSegment, t2 = t * t, t3 = t2 * t;
+      out.push({
+        x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t
+          + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2
+          + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+        y: 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t
+          + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2
+          + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3),
+      });
+    }
+  }
+  return out;
+}
+
+/** The polyline with `cut` pixels taken off its far end, for an arrowhead. */
+function trimEnd(pts: Px[], cut: number): Px[] {
+  const total = pathLength(pts);
+  if (total <= cut) return pts.slice(0, 1);
+  const keep = total - cut;
+  const out: Px[] = [pts[0]];
+  let walked = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const seg = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    if (walked + seg >= keep) {
+      const t = (keep - walked) / (seg || 1);
+      out.push({
+        x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * t,
+        y: pts[i - 1].y + (pts[i].y - pts[i - 1].y) * t,
+      });
+      break;
+    }
+    walked += seg;
+    out.push(pts[i]);
+  }
+  return out;
+}
+
+/** A rounded rectangle path, for label pills. */
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  const rad = Math.min(r, h / 2, w / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rad, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rad);
+  ctx.arcTo(x + w, y + h, x, y + h, rad);
+  ctx.arcTo(x, y + h, x, y, rad);
+  ctx.arcTo(x, y, x + w, y, rad);
+  ctx.closePath();
+}
+
 const smoothstep = (t: number) => t * t * (3 - 2 * t);
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
@@ -532,10 +605,22 @@ export class UnitOverlay {
     }
   }
 
+  /**
+   * A plan, drawn the way an operations map draws one.
+   *
+   * The three kinds have to be told apart at a glance and without reading the
+   * label, so each takes the shape its meaning has always had: an axis of
+   * advance is a broad arrow that swells as it drives into the objective, a
+   * front to hold is a line with teeth facing the enemy, and a line to fall
+   * back to is a dashed line with its ticks facing our own rear.
+   */
   private drawPlan(ctx: CanvasRenderingContext2D, plan: Plan, draft: boolean) {
     const style = PLAN_STYLE[plan.kind];
-    const pts = plan.points.map((c) => this.map.project(c));
-    if (draft && this.draftCursor) pts.push(this.map.project(this.draftCursor));
+    let pts = plan.points.map((c) => this.map.project(c)).map((p) => ({ x: p.x, y: p.y }));
+    if (draft && this.draftCursor) {
+      const c = this.map.project(this.draftCursor);
+      pts.push({ x: c.x, y: c.y });
+    }
     if (pts.length < 2) {
       if (pts.length === 1) {
         ctx.save();
@@ -548,71 +633,153 @@ export class UnitOverlay {
       return;
     }
 
+    // a hand-drawn chain of clicks becomes a fair curve, so an axis reads as a
+    // sweep rather than as a series of straight legs
+    pts = smoothPath(pts);
+
     ctx.save();
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    ctx.globalAlpha = draft ? 0.75 : 1;
+    ctx.globalAlpha = draft ? 0.8 : 1;
 
-    // dark casing keeps the line readable over any terrain
-    ctx.strokeStyle = 'rgba(18,14,10,0.6)';
-    ctx.lineWidth = plan.kind === 'invasion' ? 7 : 3.4;
-    ctx.beginPath();
-    pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+    if (plan.kind === 'invasion') this.drawAxis(ctx, pts, style.color);
+    else this.drawHoldingLine(ctx, pts, style.color, plan.kind === 'fallback');
+
+    if (!draft) {
+      // the label belongs at the head of an arrow and on the middle of a line
+      const at = plan.kind === 'invasion' ? pts[pts.length - 1] : pts[Math.floor(pts.length / 2)];
+      const label = `${plan.label}${plan.assigned.length ? ` · ${plan.assigned.length}` : ''}`;
+      ctx.font = '600 10px ui-monospace, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const wpx = ctx.measureText(label).width + 12;
+      const y = at.y - (plan.kind === 'invasion' ? 22 : 16);
+      ctx.fillStyle = 'rgba(12,10,8,0.8)';
+      roundRect(ctx, at.x - wpx / 2, y - 7.5, wpx, 15, 7);
+      ctx.fill();
+      ctx.fillStyle = style.color;
+      ctx.fillText(label, at.x, y);
+    }
+    ctx.restore();
+  }
+
+  /**
+   * An axis of advance: a broad arrow that starts narrow at the jumping-off
+   * point and swells as it drives forward, ending in a head proportioned to
+   * the arrow rather than to the screen. Drawn as one filled shape, so it
+   * reads as a movement of mass rather than as a route someone will walk.
+   */
+  private drawAxis(ctx: CanvasRenderingContext2D, pts: { x: number; y: number }[], color: string) {
+    let length = 0;
+    for (let i = 1; i < pts.length; i++) length += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    if (length < 12) return;
+
+    // the head takes a fifth of the arrow, within limits, so a short thrust and
+    // a long one both look like arrows
+    const head = Math.max(16, Math.min(46, length * 0.2));
+    const halfMax = Math.max(3.5, Math.min(13, length * 0.05));
+    const body = trimEnd(pts, head);
+    if (body.length < 2) return;
+
+    const tip = pts[pts.length - 1];
+    const before = body[body.length - 1];
+    const ang = Math.atan2(tip.y - before.y, tip.x - before.x);
+
+    // the two flanks of the shaft, swelling from the start to the head
+    const left: { x: number; y: number }[] = [];
+    const right: { x: number; y: number }[] = [];
+    let walked = 0;
+    const bodyLen = pathLength(body);
+    for (let i = 0; i < body.length; i++) {
+      if (i) walked += Math.hypot(body[i].x - body[i - 1].x, body[i].y - body[i - 1].y);
+      const t = bodyLen ? walked / bodyLen : 0;
+      const half = 1.4 + (halfMax - 1.4) * Math.pow(t, 0.65);
+      const a = body[Math.max(0, i - 1)], b = body[Math.min(body.length - 1, i + 1)];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len, ny = dx / len;
+      left.push({ x: body[i].x + nx * half, y: body[i].y + ny * half });
+      right.push({ x: body[i].x - nx * half, y: body[i].y - ny * half });
+    }
+
+    const barb = halfMax * 2.0;
+    const shape = () => {
+      ctx.beginPath();
+      ctx.moveTo(left[0].x, left[0].y);
+      for (const p of left) ctx.lineTo(p.x, p.y);
+      ctx.lineTo(before.x - Math.cos(ang) * 0 + Math.cos(ang + Math.PI / 2) * barb,
+        before.y + Math.sin(ang + Math.PI / 2) * barb);
+      ctx.lineTo(tip.x, tip.y);
+      ctx.lineTo(before.x + Math.cos(ang - Math.PI / 2) * barb,
+        before.y + Math.sin(ang - Math.PI / 2) * barb);
+      for (let i = right.length - 1; i >= 0; i--) ctx.lineTo(right[i].x, right[i].y);
+      ctx.closePath();
+    };
+
+    // casing first, so the arrow holds up over pale desert and dark water alike
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(14,11,8,0.75)';
+    ctx.lineWidth = 3;
+    shape();
     ctx.stroke();
 
-    ctx.strokeStyle = style.color;
-    ctx.lineWidth = plan.kind === 'invasion' ? 3.5 : 1.6;
-    ctx.globalAlpha = plan.kind === 'invasion' ? ctx.globalAlpha : ctx.globalAlpha * 0.85;
-    if (plan.kind === 'fallback') ctx.setLineDash([9, 6]);
-    ctx.beginPath();
-    pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+    ctx.fillStyle = color;
+    ctx.globalAlpha *= 0.82;
+    shape();
+    ctx.fill();
+    ctx.globalAlpha /= 0.82;
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.2;
+    shape();
+    ctx.stroke();
+  }
+
+  /**
+   * A line to hold, or a line to fall back to. Both are a line with ticks; the
+   * ticks face the enemy on a front and our own rear on a fallback, which is
+   * the whole difference between "stop them here" and "we give this up".
+   */
+  private drawHoldingLine(
+    ctx: CanvasRenderingContext2D, pts: { x: number; y: number }[], color: string, fallback: boolean,
+  ) {
+    const trace = () => {
+      ctx.beginPath();
+      pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+    };
+
+    ctx.strokeStyle = 'rgba(18,14,10,0.6)';
+    ctx.lineWidth = 4.4;
+    ctx.setLineDash([]);
+    trace();
+    ctx.stroke();
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.2;
+    if (fallback) ctx.setLineDash([10, 7]);
+    trace();
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // a front gets hatch marks on the enemy side; an invasion gets an arrowhead
-    if (plan.kind === 'front') {
-      // fine, widely spaced ticks on the enemy side - a survey mark on the
-      // ground rather than a row of teeth
-      ctx.lineWidth = 1.2;
-      for (let i = 1; i < pts.length; i++) {
-        const a = pts[i - 1], b = pts[i];
-        const len = Math.hypot(b.x - a.x, b.y - a.y);
-        const step = 26;
-        for (let d = step / 2; d < len; d += step) {
-          const t = d / len;
-          const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
-          const nx = -(b.y - a.y) / len, ny = (b.x - a.x) / len;
-          ctx.beginPath();
-          ctx.moveTo(x, y);
-          ctx.lineTo(x + nx * 3.5, y + ny * 3.5);
-          ctx.stroke();
-        }
+    // teeth, every 22 px, on the side the line is meant to be defended from
+    const side = fallback ? -1 : 1;
+    const height = fallback ? 4.5 : 6;
+    ctx.lineWidth = 1.8;
+    ctx.strokeStyle = color;
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i];
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (!len) continue;
+      const nx = (-(b.y - a.y) / len) * side, ny = ((b.x - a.x) / len) * side;
+      for (let d = 11; d < len; d += 22) {
+        const t = d / len;
+        const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + nx * height, y + ny * height);
+        ctx.stroke();
       }
-    } else if (plan.kind === 'invasion') {
-      const a = pts[pts.length - 2], b = pts[pts.length - 1];
-      const ang = Math.atan2(b.y - a.y, b.x - a.x);
-      ctx.fillStyle = style.color;
-      ctx.beginPath();
-      ctx.moveTo(b.x, b.y);
-      ctx.lineTo(b.x - 15 * Math.cos(ang - 0.42), b.y - 15 * Math.sin(ang - 0.42));
-      ctx.lineTo(b.x - 10 * Math.cos(ang), b.y - 10 * Math.sin(ang));
-      ctx.lineTo(b.x - 15 * Math.cos(ang + 0.42), b.y - 15 * Math.sin(ang + 0.42));
-      ctx.closePath();
-      ctx.fill();
     }
-
-    if (!draft) {
-      const mid = pts[Math.floor(pts.length / 2)];
-      ctx.font = '600 10px ui-monospace, monospace';
-      ctx.textAlign = 'center';
-      ctx.fillStyle = 'rgba(12,10,8,0.75)';
-      const label = `${plan.label}${plan.assigned.length ? ` · ${plan.assigned.length}` : ''}`;
-      const wpx = ctx.measureText(label).width + 10;
-      ctx.fillRect(mid.x - wpx / 2, mid.y - 20, wpx, 13);
-      ctx.fillStyle = style.color;
-      ctx.fillText(label, mid.x, mid.y - 10);
-    }
-    ctx.restore();
   }
 
   /**
