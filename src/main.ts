@@ -28,6 +28,7 @@ import { Demo } from './game/demo';
 import { LayersPanel } from './ui/layers';
 import { NationPanel } from './ui/nation';
 import { hasSave, loadGame, saveGame, savedAt } from './game/save';
+import { Zones } from './game/zones';
 import { Conflicts, annualDeaths, applyConflicts, type ConflictModel, type ConflictRecord } from './game/conflicts';
 import { ConflictLayer } from './map/conflicts';
 import { ConflictPanel } from './ui/conflicts';
@@ -109,6 +110,12 @@ async function boot() {
   registerMapImages(map);
   const political = new PoliticalLayer(map, world, scn);
   political.add();
+
+  // Sub-province ground. Generated on demand for the provinces that are being
+  // fought over, so the front can run through a cell instead of only along its
+  // edges, and a province changes hands a piece at a time.
+  const zones = new Zones(world);
+  political.zones = zones;
 
   const overlays = new Overlays(map);
   overlays.add();
@@ -200,6 +207,7 @@ async function boot() {
     onProvinceCaptured: (province, from, to) => {
       political.setProvinceOwner(province);
       political.markFrontlineDirty();
+      political.markZonesDirty();
       overlay?.flashCapture(province, scn.nations.get(to)?.color ?? '#ffd479');
       const p = world.province(province);
       if (to === playerId) {
@@ -209,6 +217,7 @@ async function boot() {
           sim.date, [p.lon, p.lat]);
       }
     },
+    onGroundTaken: () => political.markZonesDirty(),
     onStrike: (province, unitsHit) => {
       const p = world.province(province);
       const wingOwner = scn.controller[province];
@@ -244,6 +253,7 @@ async function boot() {
   overlay.air = air;
   sim.playerNation = playerId;
   sim.air = air;
+  sim.zones = zones;
   for (const d of scn.divisions) if (d.template === 'airwing') air.station(d);
 
   // the road graph is 12 MB, so it loads alongside the game rather than blocking it
@@ -696,6 +706,9 @@ async function boot() {
 
   /** Everything that has to be rebuilt when the world is replaced wholesale. */
   const afterWorldChange = () => {
+    // ground held inside provinces belongs to the world that just went away
+    zones.clear();
+    political.rebuildZones();
     overlay.selected.clear();
     overlay.selectedUnits.clear();
     political.setSelected([]);

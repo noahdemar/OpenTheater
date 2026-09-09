@@ -4,6 +4,7 @@ import { subunitSpeed, type Subunit } from './subunits';
 import { BASED_AT, TERRAIN, type Division } from './types';
 import type { AirOperations } from './air';
 import type { World } from './world';
+import type { Zones } from './zones';
 import { pointAlong, polylineKm, type RoadNetwork } from './roads';
 
 export interface Battle {
@@ -14,10 +15,14 @@ export interface Battle {
   defenderSide: number;
   progress: number;       // -1 defender winning .. +1 attacker winning
   days: number;
+  /** zones taken so far, fractional; a whole one is handed over at each 1 */
+  ground?: number;
 }
 
 export interface SimEvents {
   onProvinceCaptured?: (province: number, from: number, to: number) => void;
+  /** a slice of a province changed hands, without the province itself falling */
+  onGroundTaken?: (province: number) => void;
   onStrike?: (province: number, unitsHit: number) => void;
   onBattleStart?: (b: Battle) => void;
   onBattleEnd?: (b: Battle, attackerWon: boolean) => void;
@@ -28,6 +33,8 @@ const HOURS_PER_DAY = 24;
 const SPIN_UP_HOURS = 7;
 /** Hours a halted formation takes to close up and settle. */
 const SPIN_DOWN_HOURS = 5;
+/** zones a winning attack takes per day at full advantage */
+const ZONES_PER_DAY = 3;
 
 /** The game clock and everything that moves under it. */
 export class Sim {
@@ -46,6 +53,12 @@ export class Sim {
   roads: RoadNetwork | null = null;
   /** the human player's nation, whose formations take no orders from the AI */
   playerNation = -1;
+  /**
+   * Sub-province ground. When present, a battle takes a province a piece at a
+   * time instead of flipping the whole cell the moment the defence breaks.
+   */
+  zones: Zones | null = null;
+
   /** set once installations have loaded; wings fly from real airfields */
   air: AirOperations | null = null;
   private sinceOrders = 0;
@@ -325,6 +338,27 @@ export class Sim {
       }
       battle.progress = Math.max(-1, Math.min(1, (atk - def) / total));
 
+      // Ground changes hands as the attack grinds forward, not all at once
+      // when the defence finally breaks. Each bite is one zone, taken from the
+      // direction the attackers are actually pushing from.
+      if (this.zones && battle.progress > 0.08) {
+        battle.ground = (battle.ground ?? 0) + battle.progress * scale * ZONES_PER_DAY;
+        while (battle.ground >= 1) {
+          battle.ground -= 1;
+          const lead = attackers[0];
+          const taken = this.zones.takeNearest(
+            battle.province, battle.defenderSide, battle.attackerSide,
+            lead ? lead.pos : [0, 0]);
+          if (!taken) break;
+          this.events.onGroundTaken?.(battle.province);
+          if (this.zones.fullyHeld(battle.province, battle.defenderSide, battle.attackerSide)) {
+            this.captureProvince(battle);
+            break;
+          }
+        }
+        if (!this.battles.has(battle.province)) continue;
+      }
+
       if (defenders.every((d) => d.org <= 0.02)) this.captureProvince(battle);
       else if (attackers.every((d) => d.org <= 0.05)) this.endBattle(battle, false);
     }
@@ -334,6 +368,8 @@ export class Sim {
     const { scn, world } = this;
     const from = scn.controller[battle.province];
     scn.controller[battle.province] = battle.attackerSide;
+    // the whole cell is theirs now, so the piecemeal record of it is spent
+    this.zones?.reset(battle.province);
 
     // Survivors fall back to a neighbouring province they still hold - they
     // march there, they do not appear there. A beaten formation is also

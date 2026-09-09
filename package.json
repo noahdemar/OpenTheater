@@ -16,6 +16,7 @@
   "license": "ISC",
   "type": "module",
   "devDependencies": {
+    "@types/d3-delaunay": "^6.0.4",
     "@types/geojson": "^7946.0.16",
     "@types/node": "^26.4.1",
     "typescript": "^7.0.2",

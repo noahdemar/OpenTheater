@@ -2,8 +2,10 @@ import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl';
 import type { Scenario } from '../game/scenario';
 import { atWar } from '../game/scenario';
 import type { World } from '../game/world';
+import type { Zones } from '../game/zones';
 
 type Pt = [number, number];
+type Ring = Pt[];
 const key = (p: Pt) => `${p[0].toFixed(4)},${p[1].toFixed(4)}`;
 
 /**
@@ -73,6 +75,28 @@ function ownGroundSide(
 }
 
 /** Chaikin corner-cutting: takes the saw teeth off a Voronoi border. */
+/**
+ * The stretch of boundary two zones share.
+ *
+ * Zone cells are clipped from the same Voronoi diagram, so a shared edge is
+ * byte-identical in both - the same trick the province geometry uses - and can
+ * be found by hashing points rather than by intersecting polygons.
+ */
+function sharedEdge(a: Ring[], b: Ring[]): Pt[] | null {
+  const mine = new Set<string>();
+  const key = (p: number[]) => `${p[0].toFixed(5)},${p[1].toFixed(5)}`;
+  for (const ring of a) for (const p of ring) mine.add(key(p));
+  const run: Pt[] = [];
+  for (const ring of b) {
+    for (const p of ring) {
+      if (mine.has(key(p))) run.push([p[0], p[1]]);
+      else if (run.length >= 2) return run;
+      else run.length = 0;
+    }
+  }
+  return run.length >= 2 ? run : null;
+}
+
 /** Great-circle-ish distance in degrees, good enough for stitching endpoints. */
 const dist = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
@@ -190,6 +214,12 @@ function smoothChains(chains: Pt[][], passes = 3): Pt[][] {
 export class PoliticalLayer {
   private frontlineData: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 
+  /**
+   * Sub-province ground, once it exists. Zones are generated only for the
+   * provinces that are actually contested, so most of the map never has any.
+   */
+  zones: Zones | null = null;
+
   constructor(private map: MapLibreMap, private world: World, private scn: Scenario) {}
 
   add() {
@@ -201,6 +231,7 @@ export class PoliticalLayer {
       generateId: false,
     });
     map.addSource('frontline', { type: 'geojson', data: this.frontlineData });
+    map.addSource('zones', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
 
     const ownerColor = ['coalesce', ['feature-state', 'color'], '#8b8b8b'] as never;
 
@@ -232,6 +263,30 @@ export class PoliticalLayer {
           2, ['case', ['==', ['feature-state', 'occupied'], true], 0.5, 0],
           8, ['case', ['==', ['feature-state', 'occupied'], true], 0.38, 0],
           13, ['case', ['==', ['feature-state', 'occupied'], true], 0.18, 0]] as never,
+      },
+    }, 'boundaries/region');
+
+    // Ground taken inside a province, drawn over the province's own colour.
+    // A cell that is being fought through shows the bite that has been taken
+    // out of it rather than flipping whole when the defence finally breaks.
+    map.addLayer({
+      id: 'zones/fill',
+      type: 'fill',
+      source: 'zones',
+      paint: {
+        'fill-color': ['get', 'color'] as never,
+        'fill-opacity': ['interpolate', ['linear'], ['zoom'],
+          2, 0.82, 5, 0.72, 8, 0.42, 11, 0.18, 13, 0.07, 15, 0] as never,
+      },
+    }, 'boundaries/region');
+    map.addLayer({
+      id: 'zones/outline',
+      type: 'line',
+      source: 'zones',
+      paint: {
+        'line-color': '#2b241d',
+        'line-width': 0.4,
+        'line-opacity': ['interpolate', ['linear'], ['zoom'], 4, 0.12, 8, 0.28, 12.5, 0] as never,
       },
     }, 'boundaries/region');
 
@@ -378,11 +433,78 @@ export class PoliticalLayer {
 
   markFrontlineDirty() { this.dirty = true; }
 
+  private zonesDirty = false;
+
+  markZonesDirty() { this.zonesDirty = true; this.dirty = true; }
+
   /** Called from the main loop; rebuilds only when something actually changed. */
   flush() {
     if (!this.dirty) return;
     this.dirty = false;
+    if (this.zonesDirty) { this.zonesDirty = false; this.rebuildZones(); }
     this.rebuildFrontline();
+  }
+
+  /**
+   * Redraw the ground held inside contested provinces. Only zones that have
+   * actually changed hands are drawn: the rest of the cell is already the
+   * right colour underneath.
+   */
+  rebuildZones() {
+    const { zones, scn } = this;
+    const features: GeoJSON.Feature[] = [];
+    if (zones) {
+      for (const province of zones.provinces) {
+        const held = scn.controller[province];
+        for (const z of zones.of(province)) {
+          const owner = zones.holderOf(z, held);
+          if (owner === held) continue;
+          features.push({
+            type: 'Feature',
+            properties: { color: scn.nations.get(owner)?.color ?? '#8b8b8b', zone: z.id },
+            geometry: { type: 'Polygon', coordinates: [z.rings[0]] },
+          });
+        }
+      }
+    }
+    (this.map.getSource('zones') as GeoJSONSource | undefined)
+      ?.setData({ type: 'FeatureCollection', features });
+    return features.length;
+  }
+
+  /**
+   * The edges inside a province where the ground on either side is held by
+   * sides at war: the front where it runs through a cell rather than along the
+   * boundary between two.
+   */
+  private zoneFrontSegments(): Map<number, Pt[][]> {
+    const bySide = new Map<number, Pt[][]>();
+    const { zones, scn } = this;
+    if (!zones) return bySide;
+    for (const province of zones.provinces) {
+      const held = scn.controller[province];
+      // Ask the cheap question first. Most provinces are cut into zones simply
+      // because a battle passed through them, and never actually split.
+      if (!zones.contested(province, held)) continue;
+      const list = zones.of(province);
+      for (const z of list) {
+        const mine = zones.holderOf(z, held);
+        for (const j of z.nb) {
+          if (j < z.index) continue;                 // each edge once
+          const other = list[j];
+          const theirs = zones.holderOf(other, held);
+          if (mine === theirs || !atWar(scn, mine, theirs)) continue;
+          const seg = sharedEdge(z.rings, other.rings);
+          if (!seg) continue;
+          for (const side of [mine, theirs]) {
+            const acc = bySide.get(side) ?? [];
+            acc.push(seg);
+            bySide.set(side, acc);
+          }
+        }
+      }
+    }
+    return bySide;
   }
 
   rebuildFrontline() {
@@ -404,6 +526,13 @@ export class PoliticalLayer {
         list.push(...(segments as Pt[][]));
         bySide.set(side, list);
       }
+    }
+
+    // a front runs through contested provinces as well as between them
+    for (const [side, segs] of this.zoneFrontSegments()) {
+      const list = bySide.get(side) ?? [];
+      list.push(...segs);
+      bySide.set(side, list);
     }
 
     const spinesDrawn = new Set<Pt[]>();
