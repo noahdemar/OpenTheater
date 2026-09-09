@@ -24,6 +24,10 @@ export interface SimEvents {
 }
 
 const HOURS_PER_DAY = 24;
+/** Hours a formation takes to reach its march rate from a standing start. */
+const SPIN_UP_HOURS = 7;
+/** Hours a halted formation takes to close up and settle. */
+const SPIN_DOWN_HOURS = 5;
 
 /** The game clock and everything that moves under it. */
 export class Sim {
@@ -126,7 +130,11 @@ export class Sim {
   private moveDivisions(hours: number) {
     const { world, scn } = this;
     for (const d of scn.divisions) {
-      if (!d.route || d.attacking !== null || !d.routeKm) continue;
+      if (!d.route || d.attacking !== null || !d.routeKm) {
+        // halted: the column closes up and loses the momentum it had
+        if (d.momentum) d.momentum = Math.max(0, d.momentum - hours / SPIN_DOWN_HOURS);
+        continue;
+      }
 
       const tpl = TEMPLATES[d.template];
       const nation = scn.nations.get(d.owner)!;
@@ -138,14 +146,24 @@ export class Sim {
         : (tpl.speed * bonus(nation.techs, 'speed'))
           / (onRoad ? 1 + (terrain.move - 1) * 0.25 : terrain.move);
 
-      const travelled = (d.travelledKm ?? 0) + kmh * hours;
+      // A column takes hours to get rolling: the head moves before the tail
+      // has struck camp, and a heavier formation takes longer about it. This
+      // is what makes an army feel like a mass being shifted rather than a
+      // token being slid across a board.
+      const spinUpHours = based ? 0.5 : SPIN_UP_HOURS * (1 + tpl.armour / 40);
+      const gained = hours / spinUpHours;
+      d.momentum = Math.min(1, (d.momentum ?? 0) + gained);
+      // a shaken formation gets under way slowly and straggles
+      const drive = (0.3 + 0.7 * d.momentum) * (0.55 + 0.45 * Math.min(1, d.org / 0.8));
+
+      const travelled = (d.travelledKm ?? 0) + kmh * drive * hours;
       d.entrenchment = Math.max(0, d.entrenchment - (0.05 * hours) / HOURS_PER_DAY);
 
       if (travelled >= d.routeKm) {
         const end = d.route[d.route.length - 1];
         const province = world.provinceAt(end[0], end[1]);
         const holder = scn.controller[province];
-        if (holder !== d.owner && atWar(scn, d.owner, holder)) {
+        if (holder !== d.owner && atWar(scn, d.owner, holder) && !d.withdrawing) {
           this.beginAttack(d, province);
           continue;
         }
@@ -157,6 +175,7 @@ export class Sim {
         d.routeKm = 0;
         d.travelledKm = 0;
         d.progress = 0;
+        d.withdrawing = false;
         continue;
       }
 
@@ -164,7 +183,9 @@ export class Sim {
       const province = world.provinceAt(next[0], next[1]);
       if (province !== d.province) {
         const holder = scn.controller[province];
-        if (holder !== d.owner && atWar(scn, d.owner, holder)) {
+        // A formation falling back is not attacking its way out: it is getting
+        // clear, and a road that clips an enemy cell must not start a battle.
+        if (holder !== d.owner && atWar(scn, d.owner, holder) && !d.withdrawing) {
           // the march stops where the enemy starts
           this.beginAttack(d, province);
           continue;
@@ -303,7 +324,10 @@ export class Sim {
     const from = scn.controller[battle.province];
     scn.controller[battle.province] = battle.attackerSide;
 
-    // survivors fall back to a neighbouring province they still hold
+    // Survivors fall back to a neighbouring province they still hold - they
+    // march there, they do not appear there. A beaten formation is also
+    // already broken up, so it starts the withdrawal at speed rather than
+    // spending hours forming a column.
     for (const id of battle.defenders) {
       const d = this.byId.get(id);
       if (!d) continue;
@@ -311,20 +335,21 @@ export class Sim {
         .find((nb) => scn.controller[nb] === d.owner);
       if (retreat !== undefined) {
         const p = world.province(retreat);
-        d.province = retreat;
-        d.pos = [p.lon, p.lat];
-        d.route = null; d.target = null; d.progress = 0; d.travelledKm = 0;
+        this.moveTo([d], [p.lon, p.lat]);
+        d.withdrawing = true;
+        d.momentum = 0.8;
       }
       d.entrenchment = 0;
     }
+    // The attackers walk into the ground they have taken. Occupying a province
+    // is an advance across it, not a jump to its centre.
     for (const id of battle.attackers) {
       const d = this.byId.get(id);
       if (!d) continue;
       const p = world.province(battle.province);
-      d.province = battle.province;
-      d.pos = [p.lon, p.lat];
       d.attacking = null;
-      d.route = null; d.target = null; d.progress = 0; d.travelledKm = 0;
+      this.moveTo([d], [p.lon, p.lat]);
+      d.momentum = 0.35;                    // already moving, but disorganised
       d.entrenchment = 0;
     }
     this.battles.delete(battle.province);

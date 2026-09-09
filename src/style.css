@@ -724,3 +724,25 @@ button, .row, .tab, .band { transition:
 #layers .row.on .glyph { color: var(--accent); }
 #layers .row .box { display: grid; place-items: center; }
 .panel > .title { display: flex; align-items: center; gap: 6px; }
+
+
+/* --- unit card ------------------------------------------------------------ */
+
+/* the formation's own counter, at the size the header slot allows */
+#unitcard .chit, #unitcard .head .chit {
+  grid-row: span 2;
+  width: 30px; height: auto;
+  image-rendering: auto;
+  align-self: center;
+}
+#unitcard .grid span, #unitcard .sub {
+  display: inline-flex; align-items: center; gap: 5px;
+}
+#unitcard .orders {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 8px; padding-top: 7px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+}
+#unitcard .orders.warn { color: var(--red); }
+#unitcard .battle { display: flex; align-items: center; gap: 6px; }

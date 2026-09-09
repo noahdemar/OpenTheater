@@ -105,12 +105,12 @@ export class UnitOverlay {
     this.ctx = this.canvas.getContext('2d')!;
     this.resize();
     map.on('resize', () => this.resize());
-    this.roots = buildHierarchy(scn, (d) => this.position(d));
+    this.roots = buildHierarchy(scn, (d) => this.drawnAt(d));
   }
 
   /** Rebuild the command tree, after the order of battle changes. */
   rebuildHierarchy() {
-    this.roots = buildHierarchy(this.scn, (d) => this.position(d));
+    this.roots = buildHierarchy(this.scn, (d) => this.drawnAt(d));
   }
 
   resize() {
@@ -123,11 +123,66 @@ export class UnitOverlay {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
+  /**
+   * Eased display positions.
+   *
+   * The simulation is free to move a formation discontinuously - a brigade in
+   * contact is shown deployed on the border rather than at its own map
+   * position, and that deployment appears and disappears the instant a battle
+   * starts or ends. Drawn literally, counters flick between the two.
+   *
+   * These hold where each formation is currently *drawn* and walk it towards
+   * where it should be, in geographic space so a counter never drifts under
+   * the cursor as the camera moves. A move longer than SNAP_DEG is a genuine
+   * relocation, not a deployment, and is taken instantly - sliding a counter
+   * across a continent would be worse than the jump.
+   */
+  private shown = new Map<number, [number, number]>();
+
   /** Where a division is. Position is authoritative; the province follows it. */
   position(d: Division): [number, number] {
     // a wing sits at its field unless it is out on a sortie
     if (this.air && BASED_AT[d.template] === 'air') return this.air.position(d);
     return d.pos;
+  }
+
+  /**
+   * Advance every drawn position towards its true one. Called once per frame
+   * from tick(), so easing runs on wall clock and stays smooth whatever speed
+   * the game clock is running at.
+   */
+  private easePositions(dt: number) {
+    const SNAP_DEG = 3;
+    // ~0.45s to close the gap, which reads as a deliberate move rather than a
+    // slide, and is short enough not to lag a fast-forwarded battle
+    const k = 1 - Math.exp(-dt / 0.45);
+    const contacts = this.contacts();
+    const live = new Set<number>();
+
+    for (const d of this.scn.divisions) {
+      live.add(d.id);
+      const c = contacts.get(d.id);
+      const truth = this.position(d);
+      const target: [number, number] = c ? [c.lon, c.lat] : truth;
+      const cur = this.shown.get(d.id);
+      if (!cur) { this.shown.set(d.id, [target[0], target[1]]); continue; }
+      const dx = target[0] - cur[0], dy = target[1] - cur[1];
+      if (Math.abs(dx) > SNAP_DEG || Math.abs(dy) > SNAP_DEG) {
+        cur[0] = target[0]; cur[1] = target[1];
+        continue;
+      }
+      cur[0] += dx * k;
+      cur[1] += dy * k;
+    }
+    // formations that no longer exist should not keep a slot forever
+    if (this.shown.size > live.size) {
+      for (const id of this.shown.keys()) if (!live.has(id)) this.shown.delete(id);
+    }
+  }
+
+  /** The eased position of a formation, for drawing and for hit testing. */
+  drawnAt(d: Division): [number, number] {
+    return this.shown.get(d.id) ?? this.position(d);
   }
 
   /** Which two levels are on screen, and how far between them we are. */
@@ -144,7 +199,7 @@ export class UnitOverlay {
   rebuild() {
     const zoom = this.map.getZoom();
     const { a, b, t } = this.blend(zoom);
-    for (const r of this.roots) refreshPositions(r, (d) => this.position(d));
+    for (const r of this.roots) refreshPositions(r, (d) => this.drawnAt(d));
 
     const markers: Marker[] = [];
     if (a.level === b.level) {
@@ -200,16 +255,19 @@ export class UnitOverlay {
     const contacts = this.contacts();
 
     for (const d of this.scn.divisions) {
-      const [lon, lat] = this.position(d);
       const contact = contacts.get(d.id);
       // A formation in contact has deployed forward onto the border, which can
-      // be a long way from its province centre - so test where its battalions
-      // actually are, or the enemy half of a firing line drops out of view.
-      const at: [number, number] = contact ? [contact.lon, contact.lat] : [lon, lat];
+      // be a long way from its province centre. The eased position already
+      // holds wherever it has got to between the two, so the battalions are
+      // laid out around that rather than snapping between the two places.
+      const [lon, lat] = this.drawnAt(d);
+      const at: [number, number] = [lon, lat];
       if (at[0] < w || at[0] > e || at[1] < s || at[1] > n2) continue;
       const nation = this.scn.nations.get(d.owner)!;
+      // the contact keeps its facing, but the line forms up around wherever
+      // the formation has actually got to
       const bns = contact
-        ? battalionsInContact(d, contact, STANDOFF_M, CONTACT_FRONTAGE_M)
+        ? battalionsInContact(d, { ...contact, lon, lat }, STANDOFF_M, CONTACT_FRONTAGE_M)
         : battalionsOf(d, lon, lat, BATTALION_SPREAD_M);
       for (const bn of bns) {
         const units = spec.level === 5 ? companiesOf(bn, spread) : [bn];
@@ -236,7 +294,11 @@ export class UnitOverlay {
    * from the shared border segments between the two provinces, so a firing
    * line sits on the actual frontier rather than halfway between two centroids.
    */
+  /** contacts change only when the sim does, so they are worked out once a frame */
+  private contactCache: Map<number, Contact> | null = null;
+
   private contacts(): Map<number, Contact> {
+    if (this.contactCache) return this.contactCache;
     const out = new Map<number, Contact>();
     for (const battle of this.sim.battles.values()) {
       const target = this.world.province(battle.province);
@@ -285,6 +347,7 @@ export class UnitOverlay {
         });
       });
     }
+    this.contactCache = out;
     return out;
   }
 
@@ -372,6 +435,8 @@ export class UnitOverlay {
 
   /** Advance effects and let the firing lines shoot. */
   tick(dt: number) {
+    this.contactCache = null;                 // the sim has moved on
+    this.easePositions(dt);
     this.effects.update(dt);
     let n = 0;
     for (const f of this.flashes) { f.t += dt; if (f.t < 2.2) this.flashes[n++] = f; }

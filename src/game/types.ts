@@ -116,6 +116,16 @@ export interface Division {
   target?: [number, number] | null;
   /** province id this division is attacking, if any */
   attacking: number | null;
+  /**
+   * How far the column has got up to speed, 0..1.
+   *
+   * A division is tens of thousands of men and vehicles strung out over
+   * kilometres of road. It does not leave at its march rate and it does not
+   * stop dead, so orders take hours to show in the unit's actual movement.
+   */
+  momentum?: number;
+  /** falling back after losing a province, rather than manoeuvring */
+  withdrawing?: boolean;
   entrenchment: number;
   /** the army this formation has been assigned to, if any */
   army?: number;
