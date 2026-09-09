@@ -21,10 +21,12 @@ export class ConflictLayer {
       paint: {
         'fill-color': ['coalesce', ['feature-state', 'conflictColor'], 'rgba(0,0,0,0)'] as never,
         // heaviest at strategic zoom, gone by the time streets are drawn
+        // A tint, not a flood: the political map underneath still has to be
+        // legible, and dozens of neighbouring provinces carry this at once.
         'fill-opacity': ['interpolate', ['linear'], ['zoom'],
-          2, ['*', 0.85, ['coalesce', ['feature-state', 'conflictWeight'], 0]],
-          6, ['*', 0.6, ['coalesce', ['feature-state', 'conflictWeight'], 0]],
-          10, ['*', 0.25, ['coalesce', ['feature-state', 'conflictWeight'], 0]],
+          2, ['*', 0.34, ['coalesce', ['feature-state', 'conflictWeight'], 0]],
+          6, ['*', 0.2, ['coalesce', ['feature-state', 'conflictWeight'], 0]],
+          10, ['*', 0.08, ['coalesce', ['feature-state', 'conflictWeight'], 0]],
           13, 0] as never,
       },
     }, 'boundaries/region');
@@ -35,8 +37,11 @@ export class ConflictLayer {
       source: 'provinces',
       paint: {
         'line-color': ['coalesce', ['feature-state', 'conflictColor'], 'rgba(0,0,0,0)'] as never,
-        'line-width': ['interpolate', ['linear'], ['zoom'], 2, 0.4, 8, 1.2] as never,
-        'line-opacity': ['coalesce', ['feature-state', 'conflictWeight'], 0] as never,
+        'line-width': ['interpolate', ['linear'], ['zoom'], 2, 0.4, 8, 0.9] as never,
+        'line-opacity': ['interpolate', ['linear'], ['zoom'],
+          2, ['*', 0.5, ['coalesce', ['feature-state', 'conflictWeight'], 0]],
+          8, ['*', 0.28, ['coalesce', ['feature-state', 'conflictWeight'], 0]],
+          12, 0] as never,
       },
     }, 'boundaries/region');
   }

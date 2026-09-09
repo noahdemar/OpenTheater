@@ -1,3 +1,5 @@
+import { icon } from './icon';
+
 /**
  * Every panel closes.
  *
@@ -11,7 +13,7 @@ export function closeable(el: HTMLElement, close: () => void): HTMLButtonElement
   btn.className = 'panel-close';
   btn.title = 'close (Esc)';
   btn.setAttribute('aria-label', 'close');
-  btn.textContent = '×';
+  btn.innerHTML = icon('close', 13);
   btn.onclick = (e) => { e.stopPropagation(); close(); };
 
   const keep = () => { if (btn.parentElement !== el) el.appendChild(btn); };

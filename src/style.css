@@ -9,10 +9,15 @@
 
 :root {
   --bg: #0b0e12;
-  --surface: rgba(20, 25, 32, 0.92);
+  /* Panels are glass over a moving map, so they carry a slight vertical
+     gradient - lighter at the top, as if lit from above - rather than a flat
+     wash. It reads as a physical surface instead of a rectangle of paint. */
+  --surface: linear-gradient(180deg, rgba(27, 33, 42, 0.94), rgba(17, 21, 28, 0.94));
+  --surface-flat: rgba(20, 25, 32, 0.94);
   --surface-2: rgba(31, 38, 48, 0.9);
+  --surface-3: rgba(255, 255, 255, 0.045);
   --line: rgba(255, 255, 255, 0.09);
-  --line-strong: rgba(255, 255, 255, 0.16);
+  --line-strong: rgba(255, 255, 255, 0.18);
 
   --text: #e9eef4;
   --muted: #94a3b4;
@@ -24,9 +29,16 @@
   --red: #e2705c;
   --blue: #61a8e8;
 
-  --radius: 10px;
-  --radius-sm: 6px;
-  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  --radius: 12px;
+  --radius-sm: 7px;
+  /* two shadows: a tight contact shadow and a wide ambient one, which is what
+     makes a panel look like it is sitting above the map rather than glued to it */
+  --shadow:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 12px 34px -8px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 255, 255, 0.03) inset,
+    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 
   /* Inter is loaded in index.html and leads the stack; the rest is fallback. */
   --sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
@@ -73,11 +85,64 @@ canvas.unit-overlay { position: absolute; inset: 0; pointer-events: none; z-inde
   user-select: none; -webkit-user-select: none;
 }
 
+/* --- rails ----------------------------------------------------------------
+   Docked panels stack down a rail instead of each claiming a fixed corner.
+   Two panels can then never land on the same pixels, which is what used to
+   leave one of them with an unreachable close button. */
+.rail {
+  position: absolute;
+  top: 58px;
+  bottom: 128px;
+  /* narrow enough to leave the map the stage on a small window, wide enough
+     for the conflict board's four columns on a large one */
+  width: clamp(300px, 27vw, 348px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 14px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  pointer-events: none;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+#rail-left { left: 0; align-items: flex-start; }
+#rail-right { right: 0; align-items: flex-end; }
+.rail::-webkit-scrollbar { width: 6px; }
+.rail::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 3px; }
+
+/* Inside a rail a panel is a block in the flow, not a floating box. The
+   selector has to out-specify the per-panel `#id { top; right; width }` rules
+   further down the file, hence the id prefix. */
+#hud .rail > .panel {
+  position: relative;
+  inset: auto;
+  top: auto; right: auto; bottom: auto; left: auto;
+  transform: none;
+  width: 100%;
+  /* Panels keep their natural height and the rail scrolls past them. Only a
+     panel with its own scroll region may shrink, so that a long list scrolls
+     inside the panel and leaves its header and close button in place. */
+  flex: 0 0 auto;
+  max-height: 100%;
+  animation: panel-in 160ms var(--ease);
+}
+#hud .rail > .panel { pointer-events: auto; }
+
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #hud .rail > .panel { animation: none; }
+}
+
 /* --- panels --------------------------------------------------------------- */
 
 .panel {
   position: absolute;
   background: var(--surface);
+  background-color: var(--surface-flat);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -125,16 +190,25 @@ canvas.unit-overlay { position: absolute; inset: 0; pointer-events: none; z-inde
 }
 .kv span:first-child { color: var(--muted); }
 
+/* A panel that sets its own `display` (a flex column, say) would otherwise
+   out-specify the browser's `[hidden] { display: none }` and refuse to close.
+   This is why the World Conflicts board stayed on screen when dismissed. */
+.panel[hidden], #hud [hidden] { display: none !important; }
+
 .panel-close {
-  position: absolute; top: 6px; right: 6px;
-  width: 20px; height: 20px;
+  position: absolute; top: 8px; right: 8px;
+  width: 22px; height: 22px;
   display: grid; place-items: center;
-  padding: 0; border: 0; border-radius: 6px;
-  background: transparent; color: var(--muted);
+  padding: 0; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--faint);
   font: 15px/1 var(--sans);
   cursor: pointer;
+  transition: background 120ms var(--ease), color 120ms var(--ease);
+  z-index: 2;
 }
-.panel-close:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }
+.panel-close:hover { background: rgba(255, 255, 255, 0.11); color: var(--text); }
+.panel-close:active { background: rgba(255, 255, 255, 0.05); }
+.panel-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* headers stop short of the button so a long title never runs under it */
 .panel .head, .panel > .title { padding-right: 22px; }
 
@@ -182,6 +256,12 @@ canvas.unit-overlay { position: absolute; inset: 0; pointer-events: none; z-inde
 #topbar .speeds button:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
 #topbar .speeds button.on { color: #14181e; background: var(--accent); font-weight: 600; }
 
+#topbar button.industry, #topbar button.save, #topbar button.load,
+#topbar button.demo, #topbar button.editor, #topbar button.conflicts {
+  display: inline-flex; align-items: center; gap: 6px;
+  text-transform: none; letter-spacing: 0.005em; font-weight: 500;
+  white-space: nowrap;
+}
 #topbar .industry, #topbar .save, #topbar .load, #topbar .demo {
   background: var(--surface-2); color: var(--muted);
   border: 1px solid var(--line); border-radius: var(--radius-sm);
@@ -299,7 +379,9 @@ canvas.unit-overlay { position: absolute; inset: 0; pointer-events: none; z-inde
 
 #layers { top: 58px; right: 14px; width: 186px; }
 #layers .row {
-  display: flex; align-items: center; gap: 9px; padding: 4px 0;
+  display: grid; grid-template-columns: 14px 16px 1fr auto;
+  align-items: center; gap: 9px; padding: 4px 2px;
+  border-radius: var(--radius-sm);
   cursor: pointer; color: var(--muted); font-size: 12px;
 }
 #layers .row:hover { color: var(--text); }
@@ -544,6 +626,8 @@ canvas.unit-overlay { position: absolute; inset: 0; pointer-events: none; z-inde
   max-height: calc(100vh - 96px);
   display: flex; flex-direction: column;
 }
+/* the leaderboard is the one panel that gives up height: its list scrolls */
+#hud .rail > #conflictpanel { flex: 0 1 auto; min-height: 260px; }
 #conflictpanel .bands { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 8px; }
 #conflictpanel .band {
   display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 6px;
@@ -560,7 +644,7 @@ canvas.unit-overlay { position: absolute; inset: 0; pointer-events: none; z-inde
 #conflictpanel .band .bn { font-variant-numeric: tabular-nums; color: var(--text); }
 
 #conflictpanel .cols {
-  display: grid; grid-template-columns: 14px 1fr 44px 44px; gap: 6px;
+  display: grid; grid-template-columns: 12px minmax(0, 1fr) 40px 44px; gap: 6px;
   font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.08em;
   color: var(--muted);
   padding-bottom: 5px; border-bottom: 1px solid var(--line);
@@ -569,7 +653,7 @@ canvas.unit-overlay { position: absolute; inset: 0; pointer-events: none; z-inde
 
 #conflictpanel .conflicts { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
 #conflictpanel .conflicts li {
-  display: grid; grid-template-columns: 14px 1fr 44px 44px; gap: 6px; align-items: center;
+  display: grid; grid-template-columns: 12px minmax(0, 1fr) 40px 44px; gap: 6px; align-items: center;
   padding: 5px 2px;
   border-bottom: 1px solid var(--line);
   cursor: pointer;
@@ -578,7 +662,11 @@ canvas.unit-overlay { position: absolute; inset: 0; pointer-events: none; z-inde
 #conflictpanel .conflicts .dot { width: 8px; height: 8px; border-radius: 50%; }
 #conflictpanel .conflicts .who { display: flex; flex-direction: column; min-width: 0; }
 #conflictpanel .conflicts .cn { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#conflictpanel .conflicts .cm { font-size: 10px; color: var(--muted); }
+/* the meta line stays one line: a wrapped "6 theatres" doubles every row */
+#conflictpanel .conflicts .cm {
+  font-size: 10px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 #conflictpanel .conflicts .num { text-align: right; font-variant-numeric: tabular-nums; }
 #conflictpanel .conflicts .cumulative { color: var(--muted); }
 
@@ -588,3 +676,51 @@ canvas.unit-overlay { position: absolute; inset: 0; pointer-events: none; z-inde
   font-size: 10px; color: var(--muted);
 }
 #conflictpanel footer a { color: var(--muted); }
+
+
+/* --- icons ---------------------------------------------------------------- */
+
+.icon {
+  flex: none;
+  vertical-align: -0.16em;
+  opacity: 0.85;
+}
+button .icon, .row .icon { opacity: 0.75; }
+button:hover .icon, .row:hover .icon, .row.on .icon, button.on .icon { opacity: 1; }
+
+/* A header carries its icon in the swatch slot, so the dot and the glyph
+   never both claim the same space. */
+.panel .head .glyph {
+  display: grid; place-items: center;
+  width: 22px; height: 22px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  color: var(--accent);
+  grid-row: span 2;
+}
+.panel > .title .icon { margin-right: 6px; }
+
+/* --- finish --------------------------------------------------------------- */
+
+/* Numbers that tick must not reflow the row under them. */
+.num, .kv, .stats, .conflicts, .speeds, .date { font-variant-numeric: tabular-nums; }
+
+button, .row, .tab, .band { transition:
+  background 120ms var(--ease), border-color 120ms var(--ease), color 120ms var(--ease); }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+
+/* Scrollable regions inside panels get the same quiet scrollbar as the rails. */
+.panel .list, .panel .body, .panel .conflicts, .panel .tree {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+.panel ::-webkit-scrollbar { width: 6px; height: 6px; }
+.panel ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 3px; }
+
+
+#layers .row:hover { background: var(--surface-3); }
+#layers .row .glyph { display: grid; place-items: center; color: var(--muted); }
+#layers .row.on .glyph { color: var(--accent); }
+#layers .row .box { display: grid; place-items: center; }
+.panel > .title { display: flex; align-items: center; gap: 6px; }

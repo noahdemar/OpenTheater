@@ -1,4 +1,5 @@
 import { annualDeaths, type ConflictRecord, type Conflicts } from '../game/conflicts';
+import { icon } from './icon';
 
 const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n);
 
@@ -80,7 +81,7 @@ export class ConflictPanel {
 
     this.el.innerHTML = `
       <div class="head">
-        <span class="dot" style="background:${conflicts.tier('major').color}"></span>
+        <span class="glyph">${icon('flame', 13)}</span>
         <span class="title">World Conflicts</span>
         <span class="sub">${conflicts.all.length} ongoing · ${fmt(conflicts.deathsThisYear)} killed in the latest year on record</span>
       </div>

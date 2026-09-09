@@ -10,7 +10,13 @@
 </head>
 <body>
   <div id="map"></div>
-  <div id="hud"></div>
+  <div id="hud">
+    <!-- Panels dock into rails rather than floating at fixed corners, so two
+         of them can never land on the same pixels and hide each other. -->
+    <div id="rail-left" class="rail"></div>
+    <div id="rail-right" class="rail"></div>
+    <div id="hud-free"></div>
+  </div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

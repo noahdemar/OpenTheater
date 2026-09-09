@@ -1,3 +1,4 @@
+import { icon } from './icon';
 import type { Sim } from '../game/sim';
 import type { Scenario } from '../game/scenario';
 
@@ -25,12 +26,12 @@ export class TopBar {
       <div class="brand">THEATRE</div>
       <div class="nation"><select id="nation-pick"></select></div>
       <div class="stats"></div>
-      <button class="industry" title="industry (shift+B)">INDUSTRY</button>
-      <button class="conflicts" title="model the world's ongoing armed conflicts (W)">WORLD CONFLICTS</button>
-      <button class="editor" title="scenario editor (E)">SCENARIO EDITOR</button>
-      <button class="save" title="save (S)">SAVE</button>
-      <button class="load" title="load (L)">LOAD</button>
-      <button class="demo" title="run the set-piece battle (D)">▶ DEMO</button>
+      <button class="industry" title="industry (shift+B)">${icon('factory')}<span>Industry</span></button>
+      <button class="conflicts" title="model the world's ongoing armed conflicts (W)">${icon('flame')}<span>World Conflicts</span></button>
+      <button class="editor" title="scenario editor (E)">${icon('editor')}<span>Scenario Editor</span></button>
+      <button class="save" title="save (S)">${icon('save')}<span>Save</span></button>
+      <button class="load" title="load (L)">${icon('load')}<span>Load</span></button>
+      <button class="demo" title="run the set-piece battle (D)">${icon('play')}<span>Demo</span></button>
       <div class="clock">
         <div class="date">1 Jan 2026</div>
         <div class="speeds"></div>
@@ -41,7 +42,7 @@ export class TopBar {
     const speeds = this.el.querySelector('.speeds')!;
     for (const [i, label] of ['❚❚', '1', '2', '3', '4', '5'].entries()) {
       const b = document.createElement('button');
-      b.textContent = label;
+      if (i === 0) b.innerHTML = icon('pause', 11); else b.textContent = label;
       b.title = i === 0 ? 'pause (space)' : `speed ${i}`;
       b.onclick = () => { this.sim.speed = i; this.syncSpeed(); };
       speeds.appendChild(b);

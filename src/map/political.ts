@@ -73,23 +73,112 @@ function ownGroundSide(
 }
 
 /** Chaikin corner-cutting: takes the saw teeth off a Voronoi border. */
-function smoothChains(chains: Pt[][], passes = 2): Pt[][] {
-  return chains.map((chain) => {
-    if (chain.length < 3) return chain;
-    let pts = chain;
-    for (let pass = 0; pass < passes; pass++) {
-      const out: Pt[] = [pts[0]];
-      for (let i = 0; i < pts.length - 1; i++) {
-        const a = pts[i], b = pts[i + 1];
-        out.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25]);
-        out.push([a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+/** Great-circle-ish distance in degrees, good enough for stitching endpoints. */
+const dist = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+
+/**
+ * Join chains whose ends very nearly meet.
+ *
+ * Province edges are quantised onto a lattice, so a front that is continuous
+ * on the ground can still arrive as two chains whose endpoints differ in the
+ * last decimal - typically where three provinces meet. Stitching those closes
+ * the gaps that make a front look like dashes rather than a line.
+ */
+function stitchChains(chains: Pt[][], tol = 0.05): Pt[][] {
+  const open = chains.filter((c) => c.length > 1);
+  const out: Pt[][] = [];
+  const used = new Set<Pt[]>();
+
+  for (const start of open) {
+    if (used.has(start)) continue;
+    used.add(start);
+    const chain = [...start];
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const other of open) {
+        if (used.has(other)) continue;
+        const head = chain[0], tail = chain[chain.length - 1];
+        const oh = other[0], ot = other[other.length - 1];
+        if (dist(tail, oh) <= tol) { chain.push(...other.slice(1)); }
+        else if (dist(tail, ot) <= tol) { chain.push(...[...other].reverse().slice(1)); }
+        else if (dist(head, ot) <= tol) { chain.unshift(...other.slice(0, -1)); }
+        else if (dist(head, oh) <= tol) { chain.unshift(...[...other].reverse().slice(0, -1)); }
+        else continue;
+        used.add(other);
+        grew = true;
       }
-      out.push(pts[pts.length - 1]);
-      pts = out;
     }
-    // thin the result back down; smoothing quadruples the point count
-    return pts.filter((_, i) => i % 2 === 0 || i === pts.length - 1);
-  });
+    out.push(chain);
+  }
+  return out;
+}
+
+/**
+ * Resample a chain to roughly even spacing.
+ *
+ * Corner-cutting rounds each vertex by the same proportion, so on a polyline
+ * whose segments vary wildly in length - which province edges do - it leaves
+ * the short stretches over-rounded and the long ones straight. Evening the
+ * spacing first is what turns a lumpy border into a fair curve.
+ */
+function resample(chain: Pt[], step: number): Pt[] {
+  if (chain.length < 3) return chain;
+  const out: Pt[] = [chain[0]];
+  let carry = 0;
+  for (let i = 1; i < chain.length; i++) {
+    const a = chain[i - 1], b = chain[i];
+    const d = dist(a, b);
+    if (d === 0) continue;
+    let t = (step - carry) / d;
+    while (t <= 1) {
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+      t += step / d;
+    }
+    carry = (carry + d) % step;
+  }
+  const last = chain[chain.length - 1];
+  if (dist(out[out.length - 1], last) > step * 0.25) out.push(last);
+  return out;
+}
+
+/**
+ * Chaikin corner-cutting, with the ends pinned so a front does not creep away
+ * from the ground it belongs to.
+ */
+function chaikin(pts: Pt[], passes: number): Pt[] {
+  let cur = pts;
+  for (let pass = 0; pass < passes; pass++) {
+    if (cur.length < 3) break;
+    const out: Pt[] = [cur[0]];
+    for (let i = 0; i < cur.length - 1; i++) {
+      const a = cur[i], b = cur[i + 1];
+      out.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25]);
+      out.push([a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+    }
+    out.push(cur[cur.length - 1]);
+    cur = out;
+  }
+  return cur;
+}
+
+/**
+ * Turn raw province edges into fronts that read as fronts: stitched end to
+ * end, evenly sampled, rounded, and with the specks thrown away.
+ *
+ * A single province edge floating on its own is not a front - it is noise from
+ * one cell changing hands - and drawing it is what made the line look like
+ * scattered dashes.
+ */
+function smoothChains(chains: Pt[][], passes = 3): Pt[][] {
+  const MIN_LENGTH_DEG = 0.35;                 // shorter than this is a speck
+  const out: Pt[][] = [];
+  for (const chain of stitchChains(chains)) {
+    let span = 0;
+    for (let i = 1; i < chain.length; i++) span += dist(chain[i - 1], chain[i]);
+    if (span < MIN_LENGTH_DEG) continue;
+    out.push(chaikin(resample(chain, Math.max(0.04, span / 160)), passes));
+  }
+  return out;
 }
 
 /**

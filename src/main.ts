@@ -349,9 +349,11 @@ async function boot() {
     created: (army) => hud.setStatus(`${army.name} raised under ${army.general}`),
   });
 
-  document.getElementById('hud')!.append(
-    bar.el, card.el, tech.el, layers.el, nationPanel.el, industry.el, armyBar.el, events.el,
-    conflictPanel.el);
+  // Docked panels stack down their rail; the rest float where they always did.
+  document.getElementById('rail-right')!.append(
+    layers.el, card.el, nationPanel.el, events.el, conflictPanel.el);
+  document.getElementById('rail-left')!.append(industry.el);
+  document.getElementById('hud-free')!.append(bar.el, tech.el, armyBar.el);
 
 
   // --- the set piece --------------------------------------------------------
@@ -770,7 +772,7 @@ async function boot() {
         `scenario applied · ${r.nations} nations · ${r.provinces} provinces · ${r.units} formations`);
     },
   });
-  document.getElementById('hud')!.append(editor.el);
+  document.getElementById('hud-free')!.append(editor.el);
 
   /**
    * Every panel closes, and every panel can be brought back. Escape closes the
