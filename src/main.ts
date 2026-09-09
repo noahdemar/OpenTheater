@@ -274,7 +274,8 @@ async function boot() {
     bar.update();
   }, () => { demo.running ? demo.stop() : demo.start(); }, () => industry.toggle(),
      () => doSave(), () => doLoad(), () => hasSave(), () => editor.toggle(),
-     () => toggleConflictModel());
+     () => toggleConflictModel(),
+     () => { layers.el.hidden = !layers.el.hidden; });
 
   /**
    * Globe or flat map. The counters live on a canvas above the map, so the
@@ -367,6 +368,7 @@ async function boot() {
       overlay.rebuildHierarchy();
       political.rebuildFrontline();
     },
+    setContacts: (contacts) => { overlay.contactOverride = contacts; },
   });
 
   // --- interaction ---------------------------------------------------------
@@ -772,7 +774,7 @@ async function boot() {
         `scenario applied · ${r.nations} nations · ${r.provinces} provinces · ${r.units} formations`);
     },
   });
-  document.getElementById('hud-free')!.append(editor.el);
+  document.getElementById('rail-left')!.append(editor.el);
 
   /**
    * Every panel closes, and every panel can be brought back. Escape closes the
@@ -780,22 +782,19 @@ async function boot() {
    */
   // Ordered by how readily Escape should close them: the standing chrome
   // first, the dialogs the player just opened last.
-  const panels: { name: string; el: HTMLElement; set: (on: boolean) => void; key: string }[] = [
-    { name: 'Layers', el: layers.el, set: (on) => { layers.el.hidden = !on; }, key: 'Shift+Y' },
-    { name: 'Armies', el: armyBar.el, set: (on) => { armyBar.el.hidden = !on; }, key: 'Shift+A' },
-    { name: 'Events', el: events.el, set: (on) => { events.el.hidden = !on; }, key: 'Shift+E' },
-    { name: 'Unit', el: card.el, set: (on) => { if (!on) card.clear(); }, key: 'click a formation' },
-    { name: 'Nation', el: nationPanel.el, set: (on) => { if (!on) nationPanel.clear(); }, key: 'click a nation' },
-    { name: 'Research', el: tech.el, set: (on) => tech.toggle(on), key: 'T' },
-    { name: 'Industry', el: industry.el, set: (on) => industry.toggle(on), key: 'Shift+B' },
-    { name: 'World Conflicts', el: conflictPanel.el, set: (on) => conflictPanel.toggle(on), key: 'W' },
-    { name: 'Scenario Editor', el: editor.el, set: (on) => editor.toggle(on), key: 'E' },
+  const panels: { name: string; el: HTMLElement; set: (on: boolean) => void }[] = [
+    { name: 'Layers', el: layers.el, set: (on) => { layers.el.hidden = !on; } },
+    { name: 'Armies', el: armyBar.el, set: (on) => { armyBar.el.hidden = !on; } },
+    { name: 'Events', el: events.el, set: (on) => { events.el.hidden = !on; } },
+    { name: 'Unit', el: card.el, set: (on) => { if (!on) card.clear(); } },
+    { name: 'Nation', el: nationPanel.el, set: (on) => { if (!on) nationPanel.clear(); } },
+    { name: 'Research', el: tech.el, set: (on) => tech.toggle(on) },
+    { name: 'Industry', el: industry.el, set: (on) => industry.toggle(on) },
+    { name: 'World Conflicts', el: conflictPanel.el, set: (on) => conflictPanel.toggle(on) },
+    { name: 'Scenario Editor', el: editor.el, set: (on) => editor.toggle(on) },
   ];
   for (const p of panels) {
-    closeable(p.el, () => {
-      p.set(false);
-      hud.setStatus(`${p.name} closed — ${p.key.length > 3 ? p.key : `press ${p.key}`} to bring it back`);
-    });
+    closeable(p.el, () => p.set(false));
   }
   /** Close the panel the eye would call the top one: the last one opened. */
   const closeTopPanel = (): boolean => {

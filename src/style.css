@@ -106,7 +106,9 @@ canvas.unit-overlay { position: absolute; inset: 0; pointer-events: none; z-inde
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
 }
-#rail-left { left: 0; align-items: flex-start; }
+/* the left rail holds the working tools - industry and the scenario editor -
+   so it is given more room than the reference panels on the right */
+#rail-left { left: 0; align-items: flex-start; width: clamp(300px, 31vw, 400px); }
 #rail-right { right: 0; align-items: flex-end; }
 .rail::-webkit-scrollbar { width: 6px; }
 .rail::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 3px; }
@@ -746,3 +748,39 @@ button, .row, .tab, .band { transition:
 }
 #unitcard .orders.warn { color: var(--red); }
 #unitcard .battle { display: flex; align-items: center; gap: 6px; }
+
+
+/* --- the editor as a side panel -------------------------------------------
+   It used to be a wide sheet across the middle of the screen, which meant
+   building a scenario while looking at the map was impossible. Docked in the
+   left rail it is a column, so its tabs wrap and its forms stack. */
+
+#hud .rail > #editor { overflow: hidden; display: flex; flex-direction: column; flex: 0 1 auto; }
+#hud .rail > #editor .body { overflow-y: auto; min-height: 0; flex: 1; }
+#hud .rail > #editor .tabs { flex-wrap: wrap; row-gap: 4px; }
+#hud .rail > #editor .tab { font-size: 11px; padding: 4px 8px; }
+#hud .rail > #editor .form.inline { flex-direction: column; align-items: stretch; }
+#hud .rail > #editor .form.inline > * { width: 100%; }
+#hud .rail > #editor .form.inline > label[for], #hud .rail > #editor input[type="color"] { width: 44px; }
+#hud .rail > #editor .stats { grid-template-columns: repeat(2, 1fr); }
+#hud .rail > #editor .tree { max-height: 260px; overflow-y: auto; }
+#hud .rail > #editor .list { max-height: 240px; overflow-y: auto; }
+
+/* industry sits in the same rail and reads as the same kind of tool */
+#hud .rail > #production { width: 100%; }
+
+
+/* On a narrow window the top bar has more buttons than room; the labels go
+   and the icons carry them, rather than the row wrapping into two lines. */
+@media (max-width: 1180px) {
+  #topbar button.layers span, #topbar button.industry span,
+  #topbar button.conflicts span, #topbar button.editor span,
+  #topbar button.save span, #topbar button.load span, #topbar button.demo span {
+    display: none;
+  }
+  #topbar button.layers, #topbar button.industry, #topbar button.conflicts,
+  #topbar button.editor, #topbar button.save, #topbar button.load, #topbar button.demo {
+    padding-left: 9px; padding-right: 9px;
+  }
+}
+#topbar { flex-wrap: nowrap; }

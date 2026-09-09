@@ -19,19 +19,21 @@ export class TopBar {
               private onLoad?: () => void,
               private canLoad?: () => boolean,
               private onEditor?: () => void,
-              private onConflicts?: () => void) {
+              private onConflicts?: () => void,
+              private onLayers?: () => void) {
     this.el = document.createElement('div');
     this.el.id = 'topbar';
     this.el.innerHTML = `
       <div class="brand">THEATRE</div>
       <div class="nation"><select id="nation-pick"></select></div>
       <div class="stats"></div>
-      <button class="industry" title="industry (shift+B)">${icon('factory')}<span>Industry</span></button>
-      <button class="conflicts" title="model the world's ongoing armed conflicts (W)">${icon('flame')}<span>World Conflicts</span></button>
-      <button class="editor" title="scenario editor (E)">${icon('editor')}<span>Scenario Editor</span></button>
-      <button class="save" title="save (S)">${icon('save')}<span>Save</span></button>
-      <button class="load" title="load (L)">${icon('load')}<span>Load</span></button>
-      <button class="demo" title="run the set-piece battle (D)">${icon('play')}<span>Demo</span></button>
+      <button class="layers" title="Layers">${icon('layers')}<span>Layers</span></button>
+      <button class="industry" title="Industry">${icon('factory')}<span>Industry</span></button>
+      <button class="conflicts" title="Model the world's ongoing armed conflicts">${icon('flame')}<span>World Conflicts</span></button>
+      <button class="editor" title="Scenario editor">${icon('editor')}<span>Scenario Editor</span></button>
+      <button class="save" title="Save">${icon('save')}<span>Save</span></button>
+      <button class="load" title="Load">${icon('load')}<span>Load</span></button>
+      <button class="demo" title="Run the set-piece battle">${icon('play')}<span>Demo</span></button>
       <div class="clock">
         <div class="date">1 Jan 2026</div>
         <div class="speeds"></div>
@@ -43,7 +45,7 @@ export class TopBar {
     for (const [i, label] of ['❚❚', '1', '2', '3', '4', '5'].entries()) {
       const b = document.createElement('button');
       if (i === 0) b.innerHTML = icon('pause', 11); else b.textContent = label;
-      b.title = i === 0 ? 'pause (space)' : `speed ${i}`;
+      b.title = i === 0 ? 'Pause' : `Speed ${i}`;
       b.onclick = () => { this.sim.speed = i; this.syncSpeed(); };
       speeds.appendChild(b);
       this.speedButtons.push(b);
@@ -54,6 +56,7 @@ export class TopBar {
     this.el.querySelector<HTMLButtonElement>('.save')!.onclick = () => { this.onSave?.(); this.syncLoad(); };
     this.el.querySelector<HTMLButtonElement>('.editor')!.onclick = () => this.onEditor?.();
     this.el.querySelector<HTMLButtonElement>('.conflicts')!.onclick = () => this.onConflicts?.();
+    this.el.querySelector<HTMLButtonElement>('.layers')!.onclick = () => this.onLayers?.();
     const load = this.el.querySelector<HTMLButtonElement>('.load')!;
     load.onclick = () => this.onLoad?.();
     this.syncLoad();

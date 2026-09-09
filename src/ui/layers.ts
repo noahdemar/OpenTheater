@@ -5,7 +5,6 @@ export interface LayerToggle {
   id: string;
   label: string;
   on: boolean;
-  hint?: string;
   icon: IconName;
 }
 
@@ -13,18 +12,18 @@ export interface LayerToggle {
 export class LayersPanel {
   readonly el: HTMLElement;
   private toggles: LayerToggle[] = [
-    { icon: 'map', id: 'political', label: 'Political map', on: true, hint: 'P' },
+    { icon: 'map', id: 'political', label: 'Political map', on: true },
     { icon: 'swords', id: 'frontline', label: 'Front lines', on: true },
-    { icon: 'units', id: 'units', label: 'Units', on: true, hint: 'U' },
+    { icon: 'units', id: 'units', label: 'Units', on: true },
     { icon: 'route', id: 'plans', label: 'Plans', on: true },
     { icon: 'shield', id: 'bases', label: 'Military bases', on: true },
     { icon: 'plane', id: 'airfields', label: 'Airfields', on: true },
     { icon: 'anchor', id: 'ports', label: 'Ports', on: true },
-    { icon: 'satellite', id: 'satellites', label: 'Satellites', on: false, hint: 'K' },
+    { icon: 'satellite', id: 'satellites', label: 'Satellites', on: false },
     { icon: 'footprint', id: 'satfootprints', label: 'Satellite footprints', on: true },
     { icon: 'flame', id: 'conflictzones', label: 'Conflict zones', on: true },
-    { icon: 'hash', id: 'nato', label: 'NATO symbols', on: false, hint: 'N' },
-    { icon: 'globe', id: 'globe', label: 'Globe view', on: false, hint: 'G' },
+    { icon: 'hash', id: 'nato', label: 'NATO symbols', on: false },
+    { icon: 'globe', id: 'globe', label: 'Globe view', on: false },
   ];
 
   constructor(private onChange: (id: string, on: boolean) => void) {
@@ -40,7 +39,6 @@ export class LayersPanel {
         <span class="box">${t.on ? icon('close', 9) : ''}</span>
         <span class="glyph">${icon(t.icon, 13)}</span>
         <span class="name">${t.label}</span>
-        ${t.hint ? `<em>${t.hint}</em>` : ''}
       </label>`).join('');
     this.el.querySelectorAll<HTMLElement>('.row').forEach((row) => {
       row.onclick = () => this.set(row.dataset.id!, !this.get(row.dataset.id!));

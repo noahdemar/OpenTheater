@@ -297,6 +297,18 @@ export class UnitOverlay {
   /** contacts change only when the sim does, so they are worked out once a frame */
   private contactCache: Map<number, Contact> | null = null;
 
+  /**
+   * Where a set piece says the firing line is.
+   *
+   * Contacts are normally derived from the border two provinces share, which
+   * is right for a continental front and wrong for a landing: province cells
+   * here are a hundred kilometres across, so a battle for an island resolves
+   * on a border out at sea. A staged assault supplies its own line and
+   * everything that reads contacts - counters, battalions, tracer, shellfire -
+   * follows it.
+   */
+  contactOverride: Map<number, Contact> | null = null;
+
   private contacts(): Map<number, Contact> {
     if (this.contactCache) return this.contactCache;
     const out = new Map<number, Contact>();
@@ -346,6 +358,9 @@ export class UnitOverlay {
           ax: dax, ay: day,
         });
       });
+    }
+    if (this.contactOverride) {
+      for (const [id, c] of this.contactOverride) out.set(id, c);
     }
     this.contactCache = out;
     return out;

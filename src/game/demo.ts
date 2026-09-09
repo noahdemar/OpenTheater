@@ -34,18 +34,47 @@ export interface Stage {
  * legible up close, whereas a single contested strait can be shown whole at
  * every scale from the region down to the men on the beach.
  */
-const THEATRE: [number, number] = [25.25, 39.9];
-const THEATRE_RADIUS_DEG = 3.2;
-/** brigades added to each frontier province, per side */
-const REINFORCE = 5;
-/** how many of a province's formations join the assault */
-const ASSAULT_WAVE = 5;
+const THEATRE: [number, number] = [25.23, 39.905];
+
+/**
+ * Real places on Lemnos, because the map is real.
+ *
+ * The island is about 30 km across, which is smaller than one province cell:
+ * a province-level front cannot happen here, and the border the engine would
+ * otherwise put a battle on lies out in the Aegean. So the set piece places
+ * its troops at these points itself and tells the map where the line is.
+ */
+const LEMNOS = {
+  /** the harbour town on the west coast, and the objective */
+  myrina: [25.060, 39.874] as [number, number],
+  /** the great natural harbour on the east side: the landing */
+  moudros: [25.271, 39.883] as [number, number],
+  /** the airfield on the north-east of the island */
+  airfield: [25.236, 39.917] as [number, number],
+  /** the north-west coast */
+  kaspakas: [25.030, 39.952] as [number, number],
+  /** the neck of high ground the defence holds, between the two coasts */
+  line: 25.163,
+};
+/** everything the set piece looks at is inside this much of the island */
+const ISLAND_REACH_DEG = 0.34;
+/** north and south ends of the island, for laying the line out */
+const ISLAND_N = 39.985;
+const ISLAND_S = 39.815;
+/** brigades on each side of the island fight */
+const REINFORCE = 6;
 
 export interface DemoHooks {
   /** called when the set piece starts and ends, to clear the working panels */
   cinematic: (on: boolean) => void;
   onSetup: (summary: string) => void;
   rebuildForces: () => void;
+  /**
+   * Tell the map where the firing line is. The island is smaller than the
+   * province it sits in, so the border the engine would otherwise deploy on
+   * lies out at sea.
+   */
+  setContacts: (contacts: Map<number, { lon: number; lat: number; ax: number; ay: number }> | null) => void;
 }
 
 export class Demo {
@@ -66,163 +95,126 @@ export class Demo {
   ) {}
 
   /**
-   * Draw the offensive as a battle plan: a held front along the frontier and
-   * the axes the attack is driving along. This is the layer that makes a wall
-   * of counters read as a plan rather than a crowd.
+   * The two sides.
+   *
+   * The island belongs to whoever holds the province it sits in; the assault
+   * comes from the nearest neighbouring province in other hands. If the two
+   * are not already at war, the set piece opens one - that is what it is here
+   * to show.
    */
-  private drawPlans(front: [number, number][]) {
-    if (!front.length) return;
+  private sides(): { island: number; invader: number; defender: number; attacker: number } | null {
     const { world, scn } = this;
+    const island = world.provinceAt(THEATRE[0], THEATRE[1]);
+    if (island < 0) return null;
+    const defender = scn.controller[island];
 
-    // No drawn front line here: the map already renders the real one, in both
-    // sides' colours. Only the axes of advance are worth adding on top.
-    const attacker = scn.controller[front[0][0]];
-
-    // Three axes of advance, spread down the front, all driven by the same
-    // bloc so they read as one plan. Orienting on a single *nation* fails: a
-    // front of this length runs across several allied countries.
-    const blocOf = (nation: number) => scn.factions.find((f) => f.members.includes(nation))?.id;
-    const attackingBloc = blocOf(attacker);
-    const picks = [0.2, 0.5, 0.8]
-      .map((f) => front[Math.floor(front.length * f)])
-      .filter(Boolean)
-      .map(([x, y]) => {
-        const bx = blocOf(scn.controller[x]), by = blocOf(scn.controller[y]);
-        if (attackingBloc && bx === attackingBloc) return [x, y] as [number, number];
-        if (attackingBloc && by === attackingBloc) return [y, x] as [number, number];
-        return null;      // neither side is ours: an arrow here would point nowhere
-      })
-      .filter((pair): pair is [number, number] => !!pair);
-
-    for (const [from, to] of picks) {
-      const a = world.province(from), b = world.province(to);
-      this.plans.start('invasion', scn.controller[from]);
-      this.plans.addPoint(a.lon, a.lat);
-      this.plans.addPoint(b.lon, b.lat);
-
-      // Carry the axis into their depth only if there is depth to carry it
-      // into: an extrapolated head can otherwise end up out at sea or back on
-      // our own ground.
-      const deeper = b.nb.find((n) => n !== from
-        && scn.controller[n] === scn.controller[to]
-        && world.province(n).nb.length > 1);
-      if (deeper !== undefined) {
-        const head = world.province(deeper);
-        this.plans.addPoint(head.lon, head.lat);
-      }
-      this.plans.finish();
+    let invader = -1;
+    for (const nb of world.province(island).nb) {
+      if (scn.controller[nb] !== defender) { invader = nb; break; }
     }
-    void PLAN_STYLE;
+    if (invader < 0) return null;
+    const attacker = scn.controller[invader];
+    if (!atWar(scn, defender, attacker)) {
+      scn.wars.add(defender < attacker ? `${defender}:${attacker}` : `${attacker}:${defender}`);
+    }
+    return { island, invader, defender, attacker };
   }
 
-  /** Reinforce both sides along the frontier and launch the offensive. */
+  /** A brigade, placed exactly where the script wants it. */
+  private raise(
+    owner: number, province: number, at: [number, number], kind: UnitKind, name: string, seed: number,
+  ): Division {
+    return {
+      id: this.nextId++,
+      owner,
+      template: kind,
+      name,
+      province,
+      pos: [at[0], at[1]],
+      strength: 0.9 + (seed % 10) / 100,
+      org: 0.85 + (seed % 12) / 100,
+      experience: 0.15,
+      path: [],
+      progress: 0,
+      attacking: null,
+      entrenchment: 0.35,
+    };
+  }
+
+  private nextId = 1;
+
   /**
-   * Nobody is fighting in the Aegean when the scenario opens, so the set piece
-   * opens the war it is about to show: the two nations that share the most
-   * frontier inside the theatre.
+   * The landing on Lemnos.
+   *
+   * Two lines drawn across the island: the defence holding the neck of high
+   * ground that separates Myrina from the bay at Moudros, and the landing
+   * force pushing west off the beaches. Both are laid out at real coordinates
+   * on the real island, and the map is told where the line is, because the
+   * province the island sits inside is bigger than the island.
    */
-  private ensureWar(): void {
-    const { world, scn } = this;
-    const near = (id: number) => {
-      const p = world.province(id);
-      return Math.hypot(p.lon - THEATRE[0], (p.lat - THEATRE[1]) * 1.6) < THEATRE_RADIUS_DEG;
-    };
-    const shared = new Map<string, number>();
-    for (const [key] of world.borders) {
-      const [a, b] = key.split(':').map(Number);
-      if (!near(a) || !near(b)) continue;
-      const ca = scn.controller[a], cb = scn.controller[b];
-      if (ca === cb) continue;
-      const pair = ca < cb ? `${ca}:${cb}` : `${cb}:${ca}`;
-      shared.set(pair, (shared.get(pair) ?? 0) + 1);
-    }
-    const ranked = [...shared].sort((x, y) => y[1] - x[1]);
-    for (const [pair] of ranked) {
-      const [a, b] = pair.split(':').map(Number);
-      if (atWar(scn, a, b)) return;                 // a war is already running here
-    }
-    if (!ranked.length) return;
-    const [a, b] = ranked[0][0].split(':').map(Number);
-    scn.wars.add(a < b ? `${a}:${b}` : `${b}:${a}`);
-  }
-
   private setup(): { brigades: number; battles: number; frontKm: number } {
-    const { world, scn } = this;
-    this.ensureWar();
-    const near = (id: number) => {
-      const p = world.province(id);
-      return Math.hypot(p.lon - THEATRE[0], (p.lat - THEATRE[1]) * 1.6) < THEATRE_RADIUS_DEG;
-    };
+    const { scn } = this;
+    const sides = this.sides();
+    if (!sides) return { brigades: 0, battles: 0, frontKm: 0 };
+    const { island, invader, defender, attacker } = sides;
 
-    // the contested border in this theatre
-    const front: [number, number][] = [];
-    for (const [key] of world.borders) {
-      const [a, b] = key.split(':').map(Number);
-      if (!near(a) || !near(b)) continue;
-      if (!atWar(scn, scn.controller[a], scn.controller[b])) continue;
-      front.push([a, b]);
-    }
+    this.nextId = Math.max(0, ...scn.divisions.map((d) => d.id)) + 1;
+    const defKinds: UnitKind[] = ['mechanised', 'light', 'territorial', 'mechanised', 'light', 'armoured'];
+    const atkKinds: UnitKind[] = ['marine', 'marine', 'airborne', 'armoured', 'mechanised', 'marine'];
 
-    let nextId = Math.max(0, ...scn.divisions.map((d) => d.id)) + 1;
     const added: Division[] = [];
-    const kinds: UnitKind[] = ['mechanised', 'armoured', 'light', 'airborne', 'mechanised', 'light'];
-    const reinforce = (province: number, n: number, seed: number) => {
-      for (let i = 0; i < n; i++) {
-        const kind = kinds[(seed + i) % kinds.length];
-        added.push({
-          id: nextId++,
-          owner: scn.controller[province],
-          template: kind,
-          name: `${(seed % 40) + 1} ${TEMPLATES[kind].name}`,
-          province,
-          pos: [this.world.province(province).lon, this.world.province(province).lat],
-          strength: 0.9 + ((seed + i) % 10) / 100,
-          org: 0.85 + ((seed + i) % 12) / 100,
-          experience: 0.15,
-          path: [],
-          progress: 0,
-          attacking: null,
-          entrenchment: 0.35,
-        });
-      }
-    };
+    const defenders: Division[] = [];
+    const attackers: Division[] = [];
+    const line: { d: Division; at: [number, number]; facing: number }[] = [];
 
-    // pack the frontier provinces on both sides
-    const seen = new Set<number>();
-    let seed = 1;
-    for (const [a, b] of front) {
-      for (const p of [a, b]) {
-        if (seen.has(p)) continue;
-        seen.add(p);
-        reinforce(p, REINFORCE, seed++);
-      }
+    // spread both lines from the north of the island to the south
+    for (let i = 0; i < REINFORCE; i++) {
+      const t = i / Math.max(1, REINFORCE - 1);
+      const lat = ISLAND_N - (ISLAND_N - ISLAND_S) * t;
+      // the defence sits just west of the neck, the landing force just east
+      const dPos: [number, number] = [LEMNOS.line - 0.012, lat];
+      const aPos: [number, number] = [LEMNOS.line + 0.012, lat];
+      const dv = this.raise(defender, island, dPos, defKinds[i % defKinds.length],
+        `${i + 1} ${TEMPLATES[defKinds[i % defKinds.length]].name}`, i + 3);
+      const av = this.raise(attacker, invader, aPos, atkKinds[i % atkKinds.length],
+        `${i + 1} ${TEMPLATES[atkKinds[i % atkKinds.length]].name}`, i + 11);
+      defenders.push(dv); attackers.push(av);
+      added.push(dv, av);
+      line.push({ d: dv, at: dPos, facing: 1 }, { d: av, at: aPos, facing: -1 });
     }
-    for (const d of added) { this.scn.divisions.push(d); this.sim.byId.set(d.id, d); }
+
+    for (const d of added) { scn.divisions.push(d); this.sim.byId.set(d.id, d); }
     this.hooks.rebuildForces();
 
-    // every formation on the frontier attacks straight across it
-    let attacks = 0;
-    const contact: [number, number][] = [];
-    for (const [a, b] of front) {
-      const attackerSide = scn.controller[a];
-      const attackers = scn.divisions.filter((d) => d.province === a && d.owner === attackerSide);
-      if (!attackers.length) continue;
-      this.sim.order(attackers.slice(0, ASSAULT_WAVE), b);
-      attacks += Math.min(ASSAULT_WAVE, attackers.length);
-      const pa = world.province(a), pb = world.province(b);
-      contact.push([(pa.lon + pb.lon) / 2, (pa.lat + pb.lat) / 2]);
-    }
+    // the landing force is already ashore: it fights where it stands
+    this.sim.assault(attackers, island);
 
-    if (contact.length) {
-      // aim the camera at the middle of the contested frontier
-      const mid = contact[Math.floor(contact.length / 2)];
-      this.contactPoint = mid;
-    }
+    // and the map is told the line runs down the island, not out to sea
+    this.hooks.setContacts(new Map(line.map(({ d, at, facing }) =>
+      [d.id, { lon: at[0], lat: at[1], ax: 0, ay: facing }])));
 
-    this.front = front;
-    this.drawPlans(front);
-    const frontKm = front.reduce((s, [a, b]) => s + world.distance(a, b), 0);
-    return { brigades: added.length, battles: attacks, frontKm: Math.round(frontKm) };
+    this.contactPoint = [LEMNOS.line, (ISLAND_N + ISLAND_S) / 2];
+    this.front = [[island, invader]];
+    this.drawLandingPlan(attacker);
+
+    const frontKm = (ISLAND_N - ISLAND_S) * 111;
+    return { brigades: added.length, battles: attackers.length, frontKm: Math.round(frontKm) };
+  }
+
+  /**
+   * The plan: the beachhead at Moudros and the drive west on Myrina, with a
+   * second axis north to the airfield.
+   */
+  private drawLandingPlan(attacker: number) {
+    this.plans.plans = this.plans.plans.filter((p) => p.owner !== attacker);
+    const axis = (points: [number, number][]) => {
+      this.plans.start('invasion', attacker);
+      for (const [lon, lat] of points) this.plans.addPoint(lon, lat);
+      this.plans.finish();
+    };
+    axis([LEMNOS.moudros, [LEMNOS.line, 39.878], LEMNOS.myrina]);
+    axis([[LEMNOS.moudros[0], 39.905], LEMNOS.airfield]);
+    void PLAN_STYLE;
   }
 
   /**
@@ -230,172 +222,48 @@ export class Demo {
    * share, taken from a live battle. Resolved when the stage fires, so the
    * close-in shots land on a firing line rather than a province centroid.
    */
-  /**
-   * Where the fighting is thickest.
-   *
-   * Targeting one battle is unreliable for the close-in shots: a battle can end
-   * during the three seconds the camera takes to fly there, leaving an empty
-   * field. This picks the stretch of frontier with the most formations packed
-   * around it and then holds that point for the rest of the sequence, so the
-   * camera always lands on troops.
-   */
+  /** the point the close-in shots are holding */
   private closeFocus: [number, number] | null = null;
-  /** the battle the close-in shots are following */
-  private focusBattle: number | null = null;
 
-  /** How many formations are packed around a point. */
-  private unitsNear(at: [number, number], radius = 0.55): number {
-    let n = 0;
-    for (const d of this.scn.divisions) {
-      const dx = (d.pos[0] - at[0]) * 0.62, dy = d.pos[1] - at[1];
-      if (dx * dx + dy * dy < radius * radius) n += d.attacking !== null ? 3 : 1;
-    }
-    return n;
-  }
 
   /**
    * Where the close-in shots point.
    *
-   * A battle's brigades deploy onto the border between the two provinces, so
-   * the midpoint of that border is exactly where the troops are - which a
-   * "densest region" heuristic is not, at a zoom where the view is a tenth of
-   * a degree across. The chosen battle is held while it lasts so the camera
-   * does not hop between shots.
+   * The line the set piece staged is the line the troops are on, so the camera
+   * follows the middle of the formations actually in contact rather than the
+   * province border - which, for an island inside a much larger cell, is out
+   * in the Aegean.
    */
   private contactFocus = (): [number, number] => {
-    const { sim, world } = this;
-    const inTheatre = (province: number) => {
-      const p = world.province(province);
-      return Math.hypot(p.lon - THEATRE[0], (p.lat - THEATRE[1]) * 1.6) < THEATRE_RADIUS_DEG;
-    };
-    const borderMid = (battle: { province: number; attackers: number[] }): [number, number] | null => {
-      const attacker = sim.byId.get(battle.attackers[0]);
-      if (!attacker) return null;
-      const segs = world.borders.get(world.borderKey(attacker.province, battle.province));
-      if (segs?.length) {
-        const mid = segs[Math.floor(segs.length / 2)];
-        return [(mid[0][0] + mid[1][0]) / 2, (mid[0][1] + mid[1][1]) / 2];
-      }
-      const p = world.province(battle.province);
-      return [p.lon, p.lat];
-    };
-
-    // stay with the battle we are already watching, while it is still being fought
-    if (this.focusBattle !== null) {
-      const still = sim.battles.get(this.focusBattle);
-      if (still && still.attackers.length) {
-        const at = borderMid(still);
-        if (at) { this.closeFocus = at; return at; }
-      }
-    }
-
-    const candidates = [...sim.battles.values()]
-      .filter((b) => inTheatre(b.province) && b.attackers.length && b.defenders.length)
-      .sort((a, b) => (b.attackers.length + b.defenders.length) - (a.attackers.length + a.defenders.length));
-    for (const battle of candidates) {
-      const at = borderMid(battle);
-      if (!at) continue;
-      this.focusBattle = battle.province;
-      this.closeFocus = at;
-      return at;
-    }
-    return this.closeFocus ?? this.contactPoint;
-  };
-
-  private denseFocus = (): [number, number] => {
-    // hold the previous point while it still has troops on it; the front moves
-    // during the sequence and a stale focus lands the camera on empty fields
-    if (this.closeFocus && this.unitsNear(this.closeFocus) >= 8) return this.closeFocus;
-    const previous = this.closeFocus;
-    const { scn, world } = this;
-    const inTheatre = (lon: number, lat: number) =>
-      Math.hypot(lon - THEATRE[0], (lat - THEATRE[1]) * 1.6) < THEATRE_RADIUS_DEG;
-
-    // candidate points: the contested borders of this theatre
-    const candidates: [number, number][] = [];
-    for (const [a, b] of this.front) {
-      const pa = world.province(a), pb = world.province(b);
-      const mid: [number, number] = [(pa.lon + pb.lon) / 2, (pa.lat + pb.lat) / 2];
-      if (inTheatre(mid[0], mid[1])) candidates.push(mid);
-    }
-    if (!candidates.length) return this.contactPoint;
-
-    // Re-targeting must stay local. Jumping to the densest point anywhere in
-    // the theatre sends the camera on a continent-wide arc between shots.
-    const reachable = previous
-      ? candidates.filter((c) => Math.hypot((c[0] - previous[0]) * 0.62, c[1] - previous[1]) < 2.5)
-      : candidates;
-    const pool = reachable.length ? reachable : candidates;
-
-    let best = pool[0], bestScore = -1;
-    for (const c of pool) {
-      const score = this.unitsNear(c, 0.4);
-      if (score > bestScore) { bestScore = score; best = c; }
-    }
-    void scn;
-    this.closeFocus = best;
-    return best;
-  };
-
-  private battleFocus = (): [number, number] => {
-    // only battles in this theatre: wars now run worldwide, and the camera
-    // must not jump to another continent between shots
-    const battles = [...this.sim.battles.values()].filter((b) => {
-      const p = this.world.province(b.province);
-      return Math.hypot(p.lon - THEATRE[0], (p.lat - THEATRE[1]) * 1.6) < THEATRE_RADIUS_DEG;
-    });
-    if (!battles.length) return this.contactPoint;
-    // prefer a fight with the most units in it, so there is something to watch
-    battles.sort((a, b) => (b.attackers.length + b.defenders.length) - (a.attackers.length + a.defenders.length));
-    const battle = battles[0];
-    const attacker = this.sim.byId.get(battle.attackers[0]);
-    if (attacker) {
-      const segs = this.world.borders.get(this.world.borderKey(attacker.province, battle.province));
-      if (segs?.length) {
-        const mid = segs[Math.floor(segs.length / 2)];
-        return [(mid[0][0] + mid[1][0]) / 2, (mid[0][1] + mid[1][1]) / 2];
-      }
-    }
-    const p = this.world.province(battle.province);
-    return [p.lon, p.lat];
-  };
-
-  /** Middle of the contested frontier, for the wide shots. */
-  private frontCentre(): [number, number] {
-    if (!this.front.length) return THEATRE;
+    const engaged = this.scn.divisions.filter((d) =>
+      d.attacking !== null
+      && Math.hypot(d.pos[0] - THEATRE[0], (d.pos[1] - THEATRE[1]) * 1.6) < ISLAND_REACH_DEG);
+    if (!engaged.length) return this.closeFocus ?? this.contactPoint;
     let lon = 0, lat = 0;
-    for (const [a] of this.front) {
-      const p = this.world.province(a);
-      lon += p.lon; lat += p.lat;
-    }
-    return [lon / this.front.length, lat / this.front.length];
-  }
+    for (const d of engaged) { lon += d.pos[0]; lat += d.pos[1]; }
+    const at: [number, number] = [lon / engaged.length, lat / engaged.length];
+    this.closeFocus = at;
+    return at;
+  };
+
+
 
   private stages(): Stage[] {
+    const mid: [number, number] = [LEMNOS.line, (ISLAND_N + ISLAND_S) / 2];
     return [
-      {
-        center: () => this.frontCentre(),
-        zoom: 6.4, pitch: 0, dwell: 4200, speed: 3, duration: 2600,
-      },
-      {
-        center: () => this.frontCentre(), zoom: 7.4, pitch: 0, bearing: 0, dwell: 4600, speed: 2, duration: 2600,
-      },
-      {
-        center: () => { const f = this.battleFocus(); return [f[0] - 1.2, f[1] + 0.4]; },
-        zoom: 8.4, pitch: 0, bearing: -8, dwell: 4200, speed: 3, duration: 3200,
-      },
-      {
-        center: this.denseFocus, zoom: 10.2, pitch: 25, bearing: -14, dwell: 5200, speed: 2, duration: 3200,
-      },
-      {
-        center: this.contactFocus, zoom: 11.6, pitch: 40, bearing: -22, dwell: 5200, speed: 1, duration: 3200,
-      },
-      {
-        center: this.contactFocus, zoom: 13.2, pitch: 55, bearing: -30, dwell: 10000, speed: 1, duration: 3400, orbit: true,
-      },
-      {
-        center: this.contactFocus, zoom: 14.6, pitch: 62, bearing: -46, dwell: 12000, speed: 1, duration: 3200, orbit: true,
-      },
+      // the north Aegean, to place the island
+      { center: THEATRE, zoom: 8.6, pitch: 0, dwell: 3600, speed: 3, duration: 2600 },
+      // the whole of Lemnos: both coasts, the bay, and the line between them
+      { center: mid, zoom: 10.4, pitch: 20, bearing: -6, dwell: 4200, speed: 3, duration: 2800 },
+      // the beachhead at Moudros
+      { center: LEMNOS.moudros, zoom: 12.4, pitch: 45, bearing: -18, dwell: 4600, speed: 2, duration: 3000 },
+      // the firing line across the neck of the island
+      { center: this.contactFocus, zoom: 13.8, pitch: 55, bearing: -26, dwell: 6000, speed: 1, duration: 3200, orbit: true },
+      { center: this.contactFocus, zoom: 15.2, pitch: 60, bearing: -36, dwell: 7000, speed: 1, duration: 3200, orbit: true },
+      // Myrina: past the 3D building threshold, among the houses of the town
+      // the landing is driving on
+      { center: LEMNOS.myrina, zoom: 16.4, pitch: 66, bearing: -52, dwell: 9000, speed: 1, duration: 3400, orbit: true },
+      { center: LEMNOS.myrina, zoom: 17.4, pitch: 72, bearing: -68, dwell: 11000, speed: 1, duration: 3200, orbit: true },
     ];
   }
 
@@ -405,22 +273,23 @@ export class Demo {
    */
   private keepPressure() {
     const { scn } = this;
-    for (const [a, b] of this.front) {
-      for (const [from, to] of [[a, b], [b, a]] as [number, number][]) {
-        const side = scn.controller[from];
-        if (!atWar(scn, side, scn.controller[to])) continue;
-        const idle = scn.divisions.filter((d) =>
-          d.province === from && d.owner === side && !d.route && d.attacking === null && d.org > 0.35);
-        if (idle.length) this.sim.order(idle.slice(0, 2), to);
-      }
-    }
+    const [island, invader] = this.front[0] ?? [];
+    if (island === undefined) return;
+    // Anyone ashore who has fallen out of the fight rejoins it where they
+    // stand. Ordering them to a province would march them off the island: the
+    // whole battle is inside one cell.
+    const ashore = scn.divisions.filter((d) =>
+      (d.province === island || d.province === invader)
+      && d.attacking === null && !d.route && d.org > 0.35
+      && Math.hypot(d.pos[0] - THEATRE[0], (d.pos[1] - THEATRE[1]) * 1.6) < ISLAND_REACH_DEG);
+    const attackers = ashore.filter((d) => d.province === invader);
+    if (attackers.length) this.sim.assault(attackers, island);
   }
 
   start() {
     if (this.running) return;
     this.running = true;
     this.closeFocus = null;
-    this.focusBattle = null;
     this.hooks.cinematic(true);
     const summary = this.setup();
     this.pressure = window.setInterval(() => {

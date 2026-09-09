@@ -247,6 +247,17 @@ export class Sim {
     this.subunits.set(unit.id, { lon: unit.lon, lat: unit.lat, objective: target, kind: unit.kind });
   }
 
+  /**
+   * Put formations into an attack on a province without marching them there.
+   *
+   * The set piece stages a landing: the troops are already ashore, so the
+   * battle has to be joined where they stand rather than after a march from a
+   * province centroid a hundred kilometres away.
+   */
+  assault(divisions: Division[], province: number) {
+    for (const d of divisions) this.beginAttack(d, province);
+  }
+
   private beginAttack(d: Division, province: number) {
     const { scn } = this;
     d.attacking = province;

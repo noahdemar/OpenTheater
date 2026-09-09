@@ -11,7 +11,7 @@ export function closeable(el: HTMLElement, close: () => void): HTMLButtonElement
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'panel-close';
-  btn.title = 'close (Esc)';
+  btn.title = 'Close';
   btn.setAttribute('aria-label', 'close');
   btn.innerHTML = icon('close', 13);
   btn.onclick = (e) => { e.stopPropagation(); close(); };
